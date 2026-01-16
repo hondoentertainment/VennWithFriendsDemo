@@ -1,0 +1,70 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Venn with Friends</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: oklch(0.97 0.01 85);
+      color: oklch(0.20 0.02 270);
+    }
+    h1, h2, h3, .font-heading {
+      font-family: 'Space+Grotesk', sans-serif;
+    }
+    .venn-circle-a { fill: oklch(0.70 0.19 30); fill-opacity: 0.6; mix-blend-mode: multiply; }
+    .venn-circle-b { fill: oklch(0.68 0.18 200); fill-opacity: 0.6; mix-blend-mode: multiply; }
+    .venn-overlap { fill: oklch(0.55 0.24 264); fill-opacity: 0.4; }
+    
+    @keyframes pulse-glow {
+      0% { filter: drop-shadow(0 0 5px oklch(0.55 0.24 264 / 0.4)); }
+      50% { filter: drop-shadow(0 0 20px oklch(0.55 0.24 264 / 0.8)); }
+      100% { filter: drop-shadow(0 0 5px oklch(0.55 0.24 264 / 0.4)); }
+    }
+    .animate-overlap-glow {
+      animation: pulse-glow 2s infinite ease-in-out;
+    }
+  </style>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              primary: 'oklch(0.55 0.24 264)',
+              accent: 'oklch(0.75 0.20 150)',
+              cream: 'oklch(0.97 0.01 85)',
+              dark: 'oklch(0.20 0.02 270)',
+              coral: 'oklch(0.70 0.19 30)',
+              blue: 'oklch(0.68 0.18 200)',
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            heading: ['Space Grotesk', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+<script type="importmap">
+{
+  "imports": {
+    "@google/genai": "https://esm.sh/@google/genai@^1.37.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3"
+  }
+}
+</script>
+</head>
+<body>
+  <div id="root"></div>
+</body>
+</html>
