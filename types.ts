@@ -1,5 +1,5 @@
 
-export type GamePhase = 'LOBBY' | 'SETUP' | 'ROUND' | 'REVEAL' | 'RESULTS' | 'FINAL_RESULTS';
+export type GamePhase = 'LOBBY' | 'SETUP' | 'MATCH_CONFIG' | 'OPPONENT_SELECT' | 'ROUND' | 'REVEAL' | 'RESULTS' | 'FINAL_RESULTS' | 'ROUND_TRANSITION';
 
 export interface Player {
   id: string;
@@ -10,6 +10,19 @@ export interface Player {
   isReady: boolean;
   score: number;
   isAI: boolean;
+}
+
+export interface GameRecord {
+  date: number;
+  roomCode: string;
+  finalRank: number;
+  totalPlayers: number;
+  score: number;
+  maxRounds: number;
+}
+
+export interface UserProfile extends Player {
+  history: GameRecord[];
 }
 
 export interface ImageItem {
@@ -31,6 +44,12 @@ export interface Vote {
   targetSubmissionId: string; // playerId of the submission
 }
 
+export interface AIModeratorVerdict {
+  scores: Record<string, number>; // playerId -> points (0-10)
+  reasoning: string;
+  winnerId: string;
+}
+
 export interface GameState {
   roomCode: string;
   phase: GamePhase;
@@ -43,10 +62,12 @@ export interface GameState {
   submissions: Submission[];
   votes: Vote[];
   scoringMode: 'competitive' | 'casual';
+  moderatorTone: 'serious' | 'funny';
   selectedTopics: string[];
   aiLevel: number; // 0 to 1
   intersectionLabel?: string;
   clusters?: Record<string, string[]>;
+  aiModeratorVerdict?: AIModeratorVerdict;
 }
 
 export type AvatarOption = {

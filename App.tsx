@@ -1,11 +1,12 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { GamePhase, Player, GameState, ImageItem, Submission, Vote } from './types';
+import { GamePhase, Player, GameState, ImageItem, Submission, Vote, AIModeratorVerdict, UserProfile, GameRecord } from './types';
 import { AVATARS, GRADIENTS, INITIAL_IMAGE_DECK, PRESET_COLLECTIONS } from './constants';
 import AvatarDisplay from './components/AvatarDisplay';
 import VennDiagram from './components/VennDiagram';
 import Timer from './components/Timer';
-import { generateIntersectionLabel, generateAISubmission } from './geminiService';
+import Logo from './components/Logo';
+import { generateIntersectionLabel, generateAISubmission, searchGifs, moderateSoloRound } from './geminiService';
 
 const PREDEFINED_TOPICS = [
   'Animals', 'Nature', 'Food', 'Technology', 'Music', 'Sports', 'Travel', 'Art',
@@ -14,15 +15,25 @@ const PREDEFINED_TOPICS = [
   'Culture', 'Photography', 'Design', 'Mountains', 'Abstract'
 ];
 
+const TIMER_PRESETS = [
+  { value: 15, label: 'Blitz', icon: '⚡' },
+  { value: 30, label: 'Quick', icon: '🏎️' },
+  { value: 45, label: 'Classic', icon: '⚖️' },
+  { value: 60, label: 'Chill', icon: '☕' },
+  { value: 90, label: 'Thinker', icon: '🧠' },
+  { value: 120, label: 'Zen', icon: '🧘' }
+];
+
 type ProfileStep = 'WELCOME' | 'CUSTOMIZE' | 'PREVIEW';
 
 const App: React.FC = () => {
-  // Persistence: Load existing profile once on app start
-  const [currentUser, setCurrentUser] = useState<Player | null>(() => {
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
     const saved = localStorage.getItem('venn_user_v1');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (!parsed.history) parsed.history = [];
+        return parsed;
       } catch (e) {
         return null;
       }
@@ -30,10 +41,9 @@ const App: React.FC = () => {
     return null;
   });
 
-  // Flow control: If user exists, start them at the Lobby or Setup
   const [profileStep, setProfileStep] = useState<ProfileStep>(currentUser ? 'PREVIEW' : 'WELCOME');
   const [isEditingProfile, setIsEditingProfile] = useState(false);
-
+  const [showHistory, setShowHistory] = useState(false);
   const [gameState, setGameState] = useState<GameState>(() => ({
     roomCode: Math.random().toString(36).substring(2, 8).toUpperCase(),
     phase: 'LOBBY',
@@ -41,11 +51,12 @@ const App: React.FC = () => {
     round: 1,
     maxRounds: 5,
     timer: 60,
-    maxTimer: 60,
+    maxTimer: 45,
     currentImages: null,
     submissions: [],
     votes: [],
     scoringMode: 'competitive',
+    moderatorTone: 'funny',
     selectedTopics: [],
     aiLevel: 0.5,
   }));
@@ -58,22 +69,59 @@ const App: React.FC = () => {
   const [selectedGradient, setSelectedGradient] = useState(
     GRADIENTS.find(g => g.value === currentUser?.color) || GRADIENTS[0]
   );
+  
+  const [submissionType, setSubmissionType] = useState<Submission['type']>('text');
   const [submissionText, setSubmissionText] = useState('');
+  const [submissionMedia, setSubmissionMedia] = useState<string>(''); 
+  
+  // GIF States
+  const [gifSearchQuery, setGifSearchQuery] = useState('');
+  const [gifResults, setGifResults] = useState<string[]>([]);
+  const [isSearchingGifs, setIsSearchingGifs] = useState(false);
+
   const [votedId, setVotedId] = useState<string | null>(null);
   const [customTopicInput, setCustomTopicInput] = useState('');
   const [useCustomTopicsOnly, setUseCustomTopicsOnly] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState(false);
 
-  // Sync state player list with the current persistent user
+  const savedThisGame = useRef(false);
+
   useEffect(() => {
-    if (currentUser && gameState.players.length === 0) {
+    if (currentUser && (gameState.players.length === 0 || !gameState.players.some(p => p.id === currentUser.id))) {
       setGameState(prev => ({
         ...prev,
-        players: [currentUser],
+        players: [...prev.players.filter(p => p.id !== currentUser.id), currentUser],
       }));
     }
   }, [currentUser, gameState.players.length]);
 
-  // Round Timer Logic
+  // Handle Game Saving when FINAL_RESULTS is reached
+  useEffect(() => {
+    if (gameState.phase === 'FINAL_RESULTS' && !savedThisGame.current && currentUser) {
+      const sortedPlayers = [...gameState.players].sort((a, b) => b.score - a.score);
+      const myRank = sortedPlayers.findIndex(p => p.id === currentUser.id) + 1;
+      const myScore = gameState.players.find(p => p.id === currentUser.id)?.score || 0;
+
+      const newRecord: GameRecord = {
+        date: Date.now(),
+        roomCode: gameState.roomCode,
+        finalRank: myRank,
+        totalPlayers: gameState.players.length,
+        score: myScore,
+        maxRounds: gameState.maxRounds
+      };
+
+      const updatedUser = {
+        ...currentUser,
+        history: [newRecord, ...(currentUser.history || [])].slice(0, 50) // Keep last 50 games
+      };
+
+      setCurrentUser(updatedUser);
+      localStorage.setItem('venn_user_v1', JSON.stringify(updatedUser));
+      savedThisGame.current = true;
+    }
+  }, [gameState.phase, gameState.players, gameState.roomCode, currentUser]);
+
   useEffect(() => {
     let interval: any;
     if (gameState.phase === 'ROUND' && gameState.timer > 0) {
@@ -90,41 +138,43 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [gameState.phase, gameState.timer]);
 
-  // Handle Round Transitions
   useEffect(() => {
     if (gameState.phase === 'ROUND' && gameState.timer === 0) {
       setGameState(prev => ({ ...prev, phase: 'REVEAL' }));
-      setTimeout(() => setGameState(prev => ({ ...prev, phase: 'RESULTS' })), 3000);
+      setTimeout(() => setGameState(prev => ({ ...prev, phase: 'RESULTS' })), 4000);
     }
   }, [gameState.timer, gameState.phase]);
 
-  // Detect Early Completion
   useEffect(() => {
     if (gameState.phase === 'ROUND' && 
         gameState.players.length > 0 && 
         gameState.submissions.length === gameState.players.length) {
-      setTimeout(() => setGameState(prev => ({ ...prev, timer: 0, phase: 'REVEAL' })), 800);
+      setTimeout(() => setGameState(prev => ({ ...prev, timer: 0 })), 800);
     }
   }, [gameState.submissions.length, gameState.players.length, gameState.phase]);
 
-  // Gemini Intersection Analysis
   useEffect(() => {
     if (gameState.phase === 'RESULTS' && !gameState.intersectionLabel) {
-      const getLabel = async () => {
+      const isSoloHuman = gameState.players.filter(p => !p.isAI).length === 1;
+      
+      const analyzeRound = async () => {
         if (gameState.currentImages && gameState.submissions.length > 0) {
-          const res = await generateIntersectionLabel(
-            gameState.currentImages[0], 
-            gameState.currentImages[1], 
-            gameState.submissions
-          );
-          setGameState(prev => ({ ...prev, ...res }));
+          const [labelRes, moderatorRes] = await Promise.all([
+            generateIntersectionLabel(gameState.currentImages[0], gameState.currentImages[1], gameState.submissions),
+            isSoloHuman ? moderateSoloRound(gameState.currentImages[0], gameState.currentImages[1], gameState.submissions, gameState.moderatorTone) : Promise.resolve(undefined)
+          ]);
+          
+          setGameState(prev => ({ 
+            ...prev, 
+            ...labelRes,
+            aiModeratorVerdict: moderatorRes 
+          }));
         }
       };
-      getLabel();
+      analyzeRound();
     }
-  }, [gameState.phase, gameState.currentImages, gameState.submissions, gameState.intersectionLabel]);
+  }, [gameState.phase, gameState.currentImages, gameState.submissions, gameState.intersectionLabel, gameState.moderatorTone]);
 
-  // AI Logic
   useEffect(() => {
     if (gameState.phase === 'ROUND' && gameState.currentImages) {
       gameState.players.filter(p => p.isAI).forEach(aiPlayer => {
@@ -142,14 +192,13 @@ const App: React.FC = () => {
               }]
             };
           });
-        }, 3000 + Math.random() * 4000);
+        }, 5000 + Math.random() * 5000);
       });
     }
   }, [gameState.phase, gameState.currentImages, gameState.players]);
 
-  // Persist Profile and Enter Game
   const handleProfileConfirm = () => {
-    const newPlayer: Player = {
+    const newPlayer: UserProfile = {
       id: currentUser?.id || Math.random().toString(36).substring(7),
       name: inputName,
       avatar: selectedAvatar.emoji,
@@ -157,7 +206,8 @@ const App: React.FC = () => {
       isHost: true,
       isReady: true,
       score: currentUser?.score || 0,
-      isAI: false
+      isAI: false,
+      history: currentUser?.history || []
     };
     setCurrentUser(newPlayer);
     localStorage.setItem('venn_user_v1', JSON.stringify(newPlayer));
@@ -176,7 +226,7 @@ const App: React.FC = () => {
     const aiGrad = GRADIENTS[Math.floor(Math.random() * GRADIENTS.length)];
     const newAI: Player = {
       id: `ai_${Math.random().toString(36).substring(7)}`,
-      name: `Robot ${gameState.players.length}`,
+      name: `Robot ${gameState.players.filter(p => p.isAI).length + 1}`,
       avatar: aiAvatar.emoji,
       color: aiGrad.value,
       isHost: false,
@@ -207,6 +257,7 @@ const App: React.FC = () => {
   };
 
   const startRound = () => {
+    savedThisGame.current = false;
     const pool = useCustomTopicsOnly 
       ? INITIAL_IMAGE_DECK.filter(img => img.tags.some(t => gameState.selectedTopics.includes(t.toLowerCase())))
       : INITIAL_IMAGE_DECK;
@@ -221,20 +272,52 @@ const App: React.FC = () => {
       submissions: [],
       votes: [],
       intersectionLabel: undefined,
-      clusters: undefined
+      clusters: undefined,
+      aiModeratorVerdict: undefined
     }));
     setSubmissionText('');
+    setSubmissionMedia('');
+    setSubmissionType('text');
+    setGifSearchQuery('');
+    setGifResults([]);
     setVotedId(null);
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSubmissionMedia(reader.result as string);
+        if (file.type.startsWith('image')) setSubmissionType('image');
+        else if (file.type.startsWith('video')) setSubmissionType('video');
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleGifSearch = async () => {
+    if (!gifSearchQuery.trim()) return;
+    setIsSearchingGifs(true);
+    setGifResults([]);
+    try {
+      const results = await searchGifs(gifSearchQuery);
+      setGifResults(results);
+    } finally {
+      setIsSearchingGifs(false);
+    }
+  };
+
   const handleSubmit = () => {
-    if (!submissionText.trim() || !currentUser || submissionText.length > 250) return;
+    const content = submissionType === 'text' ? submissionText : submissionMedia;
+    if (!content.trim() || !currentUser) return;
+    
     setGameState(prev => ({
       ...prev,
       submissions: [...prev.submissions, {
         playerId: currentUser.id,
-        content: submissionText,
-        type: 'text',
+        content: content,
+        type: submissionType,
         timestamp: Date.now()
       }]
     }));
@@ -252,39 +335,174 @@ const App: React.FC = () => {
   const finishRound = () => {
     const voteCounts: Record<string, number> = {};
     gameState.votes.forEach(v => voteCounts[v.targetSubmissionId] = (voteCounts[v.targetSubmissionId] || 0) + 1);
-    const winningPlayerId = Object.entries(voteCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+    
+    const winningPlayerId = gameState.aiModeratorVerdict 
+      ? gameState.aiModeratorVerdict.winnerId 
+      : Object.entries(voteCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+      
     const fastest = gameState.submissions.sort((a, b) => a.timestamp - b.timestamp)[0];
 
     setGameState(prev => ({
       ...prev,
       players: prev.players.map(p => {
         let pts = 0;
-        if (p.id === winningPlayerId) pts += 5;
-        if (p.id === fastest?.playerId) pts += 2;
+        if (prev.aiModeratorVerdict) {
+          pts = prev.aiModeratorVerdict.scores[p.id] || 0;
+        } else {
+          if (p.id === winningPlayerId) pts += 5;
+          if (p.id === fastest?.playerId) pts += 2;
+        }
         return { ...p, score: p.score + pts };
       }),
       round: prev.round + 1,
-      phase: prev.round >= prev.maxRounds ? 'FINAL_RESULTS' : 'LOBBY'
+      phase: prev.round >= prev.maxRounds ? 'FINAL_RESULTS' : 'ROUND_TRANSITION' 
     }));
   };
 
-  // --- Profile Entry / Creation Flow ---
+  const handleCopyLink = () => {
+    const url = `${window.location.origin}/#join=${gameState.roomCode}`;
+    navigator.clipboard.writeText(url);
+    setCopyFeedback(true);
+    setTimeout(() => setCopyFeedback(false), 2000);
+    return url;
+  };
+
+  const handleMessengerInvite = () => {
+    const inviteUrl = `${window.location.origin}/#join=${gameState.roomCode}`;
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    if (isMobile) {
+      window.location.href = `fb-messenger://share/?link=${encodeURIComponent(inviteUrl)}`;
+    } else {
+      handleCopyLink();
+      window.open('https://www.messenger.com/', '_blank');
+    }
+  };
+
+  const renderMedia = (sub: Submission, size: 'reveal' | 'result' = 'result') => {
+    const isReveal = size === 'reveal';
+    const containerClasses = isReveal 
+      ? "w-full rounded-2xl overflow-hidden shadow-2xl border-4 border-white bg-black/20"
+      : "w-full aspect-video rounded-xl overflow-hidden bg-black shadow-lg";
+
+    const mediaClasses = isReveal
+      ? "max-h-[50vh] w-full object-contain"
+      : "w-full h-full object-cover";
+
+    if (sub.type === 'text') {
+      return <p className={`italic font-medium leading-relaxed ${isReveal ? 'text-3xl p-8 text-center text-white' : 'text-xl'}`}>"{sub.content}"</p>;
+    }
+
+    if (sub.type === 'video') {
+      const isYouTube = sub.content.includes('youtube.com') || sub.content.includes('youtu.be');
+      if (isYouTube) {
+        let embedUrl = sub.content;
+        if (sub.content.includes('watch?v=')) {
+          embedUrl = sub.content.replace('watch?v=', 'embed/');
+        } else if (sub.content.includes('youtu.be/')) {
+          embedUrl = sub.content.replace('youtu.be/', 'youtube.com/embed/');
+        }
+        return (
+          <div className={containerClasses}>
+            <div className="aspect-video relative">
+              <iframe 
+                src={`${embedUrl}${embedUrl.includes('?') ? '&' : '?'}autoplay=${isReveal ? 1 : 0}&mute=${isReveal ? 1 : 0}`}
+                className="absolute inset-0 w-full h-full"
+                allow="autoplay; encrypted-media"
+                title="Video Submission"
+                frameBorder="0"
+              />
+            </div>
+          </div>
+        );
+      }
+      return (
+        <div className={containerClasses}>
+          <video 
+            src={sub.content} 
+            className={mediaClasses}
+            controls={!isReveal}
+            autoPlay={isReveal}
+            muted={isReveal}
+            loop={isReveal}
+            playsInline
+          />
+        </div>
+      );
+    }
+
+    // Default for images/gifs
+    return (
+      <div className={containerClasses}>
+        <img src={sub.content} className={mediaClasses} alt="Submission" />
+      </div>
+    );
+  };
+
+  if (showHistory && currentUser) {
+    return (
+      <div className="min-h-screen p-6 bg-brand-cream flex flex-col items-center">
+        <div className="w-full max-w-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <header className="flex justify-between items-center">
+            <Logo size="sm" />
+            <button onClick={() => setShowHistory(false)} className="text-brand-dark/40 font-bold hover:text-brand-primary transition-all flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+              Lobby
+            </button>
+          </header>
+          <div className="bg-white rounded-[2.5rem] shadow-2xl p-8 space-y-8 overflow-hidden">
+            <div className="text-center space-y-2">
+              <h2 className="text-4xl font-heading font-bold text-brand-primary">Match History</h2>
+              <p className="text-brand-dark/40">Your past collisions of vision.</p>
+            </div>
+            
+            <div className="space-y-4 max-h-[60vh] overflow-y-auto custom-scrollbar pr-2">
+              {currentUser.history && currentUser.history.length > 0 ? (
+                currentUser.history.map((record, idx) => (
+                  <div key={idx} className="bg-brand-cream/50 border border-brand-dark/5 p-5 rounded-3xl flex items-center justify-between group hover:bg-white hover:shadow-lg transition-all">
+                    <div className="flex items-center gap-4">
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center font-heading font-bold text-xl ${record.finalRank === 1 ? 'bg-brand-accent text-brand-dark' : 'bg-brand-dark/5 text-brand-dark/30'}`}>
+                        #{record.finalRank}
+                      </div>
+                      <div>
+                        <div className="text-sm font-bold text-brand-dark">{new Date(record.date).toLocaleDateString()}</div>
+                        <div className="text-[10px] font-black text-brand-dark/20 uppercase tracking-widest">Room: {record.roomCode}</div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-2xl font-heading font-bold text-brand-primary">{record.score}</div>
+                      <div className="text-[10px] font-black text-brand-dark/20 uppercase tracking-widest">{record.maxRounds} Rounds</div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-center py-12 space-y-4">
+                  <div className="text-6xl">🏜️</div>
+                  <p className="text-brand-dark/30 italic">No history yet. Start your first match!</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!currentUser || isEditingProfile) {
     if (profileStep === 'WELCOME' && !isEditingProfile) {
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-brand-cream text-center space-y-8 animate-in fade-in zoom-in-95 duration-500">
-          <div className="w-40 h-40 bg-brand-primary rounded-full flex items-center justify-center shadow-2xl animate-bounce duration-[3000ms]">
-             <svg className="w-24 h-24 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" /></svg>
-          </div>
-          <div className="space-y-4">
-            <h1 className="text-6xl font-heading font-bold text-brand-primary">Venn with Friends</h1>
-            <p className="text-xl text-brand-dark/60 max-w-sm mx-auto">The fast-paced party game of creative intersections.</p>
+        <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-brand-cream text-center space-y-12 animate-in fade-in zoom-in-95 duration-500">
+          <Logo size="xl" className="animate-overlap-glow" />
+          <div className="space-y-6 max-w-xl mx-auto">
+            <h2 className="text-4xl sm:text-6xl font-heading font-bold leading-tight tracking-tight text-brand-dark">
+              Find the <span className="bg-gradient-to-r from-brand-coral via-brand-primary to-brand-blue bg-clip-text text-transparent">creative spark</span> where visions collide.
+            </h2>
+            <p className="text-brand-dark/40 font-medium text-lg italic tracking-wide">A multiplayer journey into shared perspectives.</p>
           </div>
           <button 
             onClick={() => setProfileStep('CUSTOMIZE')}
             className="bg-brand-primary text-white px-12 py-5 rounded-full font-heading font-bold text-2xl shadow-xl hover:scale-105 active:scale-95 transition-all"
           >
-            Start Your Journey
+            Start Your VEnngines!
           </button>
         </div>
       );
@@ -293,6 +511,7 @@ const App: React.FC = () => {
     if (profileStep === 'CUSTOMIZE' || isEditingProfile) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-brand-cream animate-in slide-in-from-bottom-8 duration-300">
+          <Logo size="md" className="mb-8" />
           <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-8 space-y-8">
             <div className="text-center space-y-2">
               <h2 className="text-4xl font-heading font-bold text-brand-primary">Create Profile</h2>
@@ -303,7 +522,7 @@ const App: React.FC = () => {
             </div>
             <div className="space-y-4">
               <div>
-                <label className="text-xs font-bold text-brand-dark/40 uppercase">Display Name</label>
+                <label className="text-xs font-bold text-brand-dark/40 uppercase tracking-widest">Display Name</label>
                 <input 
                   type="text" value={inputName} 
                   onChange={(e) => setInputName(e.target.value)}
@@ -312,7 +531,7 @@ const App: React.FC = () => {
                 />
               </div>
               <div>
-                <label className="text-xs font-bold text-brand-dark/40 uppercase">Select Avatar</label>
+                <label className="text-xs font-bold text-brand-dark/40 uppercase tracking-widest">Select Avatar</label>
                 <div className="grid grid-cols-6 gap-2 mt-2 max-h-40 overflow-y-auto p-1 custom-scrollbar">
                   {AVATARS.map((av) => (
                     <button 
@@ -325,7 +544,7 @@ const App: React.FC = () => {
                 </div>
               </div>
               <div>
-                <label className="text-xs font-bold text-brand-dark/40 uppercase">Theme</label>
+                <label className="text-xs font-bold text-brand-dark/40 uppercase tracking-widest">Theme</label>
                 <div className="grid grid-cols-4 gap-2 mt-2">
                   {GRADIENTS.map((g) => (
                     <button 
@@ -336,14 +555,12 @@ const App: React.FC = () => {
                 </div>
               </div>
             </div>
-            <div className="flex gap-4">
-              <button 
-                onClick={() => setProfileStep('PREVIEW')} disabled={!inputName.trim()}
-                className="w-full bg-brand-primary text-white py-4 rounded-2xl font-bold shadow-lg shadow-brand-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50"
-              >
-                Continue
-              </button>
-            </div>
+            <button 
+              onClick={() => setProfileStep('PREVIEW')} disabled={!inputName.trim()}
+              className="w-full bg-brand-primary text-white py-4 rounded-2xl font-bold shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50"
+            >
+              Continue
+            </button>
           </div>
         </div>
       );
@@ -352,6 +569,7 @@ const App: React.FC = () => {
     if (profileStep === 'PREVIEW') {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-brand-cream animate-in zoom-in-95 duration-300">
+          <Logo size="md" className="mb-8" />
           <div className="w-full max-w-sm bg-white rounded-3xl shadow-2xl p-8 flex flex-col items-center text-center space-y-8">
             <h2 className="text-3xl font-heading font-bold text-brand-primary">Save Profile?</h2>
             <div className={`p-8 rounded-3xl bg-gradient-to-br ${selectedGradient.value} w-full shadow-2xl transition-all`}>
@@ -362,18 +580,8 @@ const App: React.FC = () => {
                </div>
             </div>
             <div className="w-full space-y-4 pt-4">
-              <button 
-                onClick={handleProfileConfirm}
-                className="w-full bg-brand-primary text-white py-5 rounded-2xl font-heading font-bold text-xl shadow-xl hover:scale-105 active:scale-95 transition-all"
-              >
-                Confirm & Play
-              </button>
-              <button 
-                onClick={() => setProfileStep('CUSTOMIZE')}
-                className="w-full py-3 text-brand-dark/40 font-bold hover:text-brand-primary transition-all"
-              >
-                Edit Details
-              </button>
+              <button onClick={handleProfileConfirm} className="w-full bg-brand-primary text-white py-5 rounded-2xl font-heading font-bold text-xl shadow-xl hover:scale-105 active:scale-95 transition-all">Confirm & Play</button>
+              <button onClick={() => setProfileStep('CUSTOMIZE')} className="w-full py-3 text-brand-dark/40 font-bold hover:text-brand-primary transition-all">Edit Details</button>
             </div>
           </div>
         </div>
@@ -381,181 +589,17 @@ const App: React.FC = () => {
     }
   }
 
-  // --- Game Setup Wizard ---
-  if (gameState.phase === 'SETUP') {
-    return (
-      <div className="min-h-screen p-6 bg-brand-cream max-w-2xl mx-auto space-y-6">
-        <div className="flex items-center gap-4">
-          <button onClick={() => setGameState(prev => ({...prev, phase: 'LOBBY'}))} className="p-2 hover:bg-brand-dark/5 rounded-full text-brand-primary">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
-          </button>
-          <h2 className="text-2xl font-heading font-bold">Configure Match</h2>
-        </div>
-
-        <div className="flex gap-2 mb-4">
-          {[1, 2, 3, 4].map(step => (
-            <div key={step} className={`h-2 flex-1 rounded-full ${setupStep >= step ? 'bg-brand-primary' : 'bg-brand-dark/10'} transition-all duration-300`} />
-          ))}
-        </div>
-
-        <div className="min-h-[420px]">
-          {setupStep === 1 && (
-            <div className="bg-white p-6 rounded-3xl shadow-xl space-y-6 animate-in fade-in slide-in-from-right-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xl font-heading font-bold">Participants</h3>
-                <button onClick={() => setIsEditingProfile(true)} className="text-xs font-bold text-brand-primary hover:underline">
-                  Change My Identity
-                </button>
-              </div>
-              <div className="space-y-3">
-                {gameState.players.map(p => (
-                  <div key={p.id} className="flex items-center justify-between p-3 bg-brand-cream/50 rounded-2xl border border-brand-dark/5">
-                    <div className="flex items-center gap-3">
-                      <AvatarDisplay avatar={p.avatar} color={p.color} size="sm" />
-                      <span className="font-medium text-brand-dark/80">{p.name} {p.isAI ? '(AI)' : ''}</span>
-                    </div>
-                    {p.isHost && <span className="text-[10px] bg-brand-primary/10 text-brand-primary px-2 py-1 rounded-full font-bold">HOST</span>}
-                  </div>
-                ))}
-                <button onClick={addAIPlayer} className="w-full p-4 border-2 border-dashed border-brand-dark/10 rounded-2xl flex items-center justify-center gap-2 text-brand-dark/40 hover:border-brand-primary hover:text-brand-primary transition-all">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
-                  Add Computer Player
-                </button>
-              </div>
-            </div>
-          )}
-
-          {setupStep === 2 && (
-            <div className="bg-white p-6 rounded-3xl shadow-xl space-y-6 animate-in fade-in slide-in-from-right-4">
-              <h3 className="text-xl font-heading font-bold">Time Limit</h3>
-              <div className="space-y-4">
-                <input 
-                  type="range" min="15" max="120" step="15" value={gameState.maxTimer} 
-                  onChange={(e) => setGameState(prev => ({...prev, maxTimer: Number(e.target.value)}))}
-                  className="w-full accent-brand-primary h-2 bg-brand-dark/10 rounded-lg appearance-none cursor-pointer"
-                />
-                <div className="flex justify-between text-xs font-bold text-brand-dark/40 uppercase">
-                  <span>Blitz (15s)</span>
-                  <span className="text-brand-primary text-xl font-heading normal-case">{gameState.maxTimer} Seconds</span>
-                  <span>Relaxed (120s)</span>
-                </div>
-                <div className="grid grid-cols-3 gap-3">
-                  {[30, 45, 60].map(t => (
-                    <button key={t} onClick={() => setGameState(prev => ({...prev, maxTimer: t}))}
-                      className={`py-3 rounded-xl border-2 transition-all font-bold ${gameState.maxTimer === t ? 'bg-brand-primary/10 border-brand-primary text-brand-primary' : 'border-brand-dark/5 hover:border-brand-primary/20'}`}
-                    >
-                      {t}s
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {setupStep === 3 && (
-            <div className="bg-white p-6 rounded-3xl shadow-xl space-y-6 animate-in fade-in slide-in-from-right-4">
-              <h3 className="text-xl font-heading font-bold">Game Style</h3>
-              <div className="space-y-3">
-                <button onClick={() => setGameState(prev => ({...prev, scoringMode: 'competitive'}))}
-                  className={`w-full p-5 rounded-3xl border-2 text-left transition-all ${gameState.scoringMode === 'competitive' ? 'bg-brand-primary/5 border-brand-primary shadow-sm' : 'border-brand-dark/5 hover:border-brand-dark/10'}`}
-                >
-                  <div className="flex justify-between items-center">
-                    <span className="font-bold text-lg">Competitive Arena</span>
-                    {gameState.scoringMode === 'competitive' && <div className="w-6 h-6 bg-brand-primary rounded-full flex items-center justify-center text-white"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg></div>}
-                  </div>
-                  <p className="text-sm text-brand-dark/60 mt-1">Voting, leaderboards, and speed bonuses for the winners.</p>
-                </button>
-                <button onClick={() => setGameState(prev => ({...prev, scoringMode: 'casual'}))}
-                  className={`w-full p-5 rounded-3xl border-2 text-left transition-all ${gameState.scoringMode === 'casual' ? 'bg-brand-primary/5 border-brand-primary shadow-sm' : 'border-brand-dark/5 hover:border-brand-dark/10'}`}
-                >
-                  <div className="flex justify-between items-center">
-                    <span className="font-bold text-lg">Casual Playground</span>
-                    {gameState.scoringMode === 'casual' && <div className="w-6 h-6 bg-brand-primary rounded-full flex items-center justify-center text-white"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg></div>}
-                  </div>
-                  <p className="text-sm text-brand-dark/60 mt-1">Focus on fun and creativity without the pressure of points.</p>
-                </button>
-              </div>
-            </div>
-          )}
-
-          {setupStep === 4 && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-              <div className="bg-white p-6 rounded-3xl shadow-xl space-y-4">
-                <div className="flex justify-between items-center">
-                  <h3 className="text-xl font-heading font-bold">Topics</h3>
-                  <span className="text-xs font-bold text-brand-primary bg-brand-primary/10 px-3 py-1 rounded-full">
-                    {gameState.selectedTopics.length} / 5 ACTIVE
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  {PRESET_COLLECTIONS.map(pack => (
-                    <button key={pack.id} onClick={() => setGameState(prev => ({...prev, selectedTopics: pack.topics.slice(0, 5)}))}
-                      className={`p-4 rounded-3xl border-2 text-left transition-all ${gameState.selectedTopics.every(t => pack.topics.includes(t)) && gameState.selectedTopics.length === Math.min(5, pack.topics.length) ? 'bg-brand-primary/5 border-brand-primary' : 'border-brand-dark/5 hover:border-brand-dark/10'}`}
-                    >
-                      <span className="text-2xl">{pack.icon}</span>
-                      <div className="font-bold mt-2">{pack.name}</div>
-                      <div className="text-[10px] text-brand-dark/40 truncate font-bold uppercase tracking-widest">{pack.topics.join(' • ')}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="bg-white p-6 rounded-3xl shadow-xl space-y-4">
-                <h3 className="text-xl font-heading font-bold">Custom Intersection Keywords</h3>
-                <div className="flex gap-2">
-                  <input 
-                    type="text" placeholder="Add a custom topic..." value={customTopicInput}
-                    onChange={(e) => setCustomTopicInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleCustomTopicAdd()}
-                    className="flex-1 p-3 bg-brand-cream rounded-xl border border-brand-dark/10 outline-none focus:border-brand-primary"
-                  />
-                  <button onClick={handleCustomTopicAdd} className="bg-brand-dark text-white px-6 rounded-xl font-bold">Add</button>
-                </div>
-                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-1 custom-scrollbar">
-                  {PREDEFINED_TOPICS.map(topic => (
-                    <button key={topic} onClick={() => toggleTopic(topic.toLowerCase())}
-                      className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all border-2 ${gameState.selectedTopics.includes(topic.toLowerCase()) ? 'bg-brand-primary border-brand-primary text-white shadow-md' : 'bg-white border-brand-dark/5 text-brand-dark/40 hover:border-brand-dark/20'}`}
-                    >
-                      {topic}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="flex gap-4">
-          <button onClick={() => setSetupStep(prev => Math.max(1, prev - 1))} className="flex-1 py-4 border-2 border-brand-dark/10 rounded-2xl font-bold hover:bg-brand-dark/5 transition-all">
-            Back
-          </button>
-          <button 
-            onClick={() => {
-              if (setupStep === 4) {
-                setGameState(prev => ({...prev, phase: 'LOBBY'}));
-                setSetupStep(1);
-              } else {
-                setSetupStep(prev => prev + 1);
-              }
-            }}
-            className="flex-1 py-4 bg-brand-primary text-white rounded-2xl font-bold shadow-lg shadow-brand-primary/20 hover:brightness-110 active:scale-95 transition-all"
-          >
-            {setupStep === 4 ? 'Confirm Settings' : 'Next Step'}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // --- Main Lobby ---
   if (gameState.phase === 'LOBBY') {
     return (
       <div className="min-h-screen p-6 bg-brand-cream flex flex-col items-center">
         <div className="w-full max-w-4xl space-y-8 animate-in fade-in duration-500">
           <header className="flex justify-between items-center">
-            <h1 className="text-3xl font-heading font-bold text-brand-primary">Venn with Friends</h1>
+            <Logo size="md" />
             <div className="flex gap-2">
-              <span className="px-4 py-2 bg-white rounded-full text-xs font-bold border border-brand-dark/10 flex items-center gap-2 shadow-sm">
+              <button onClick={() => setShowHistory(true)} className="p-2.5 bg-white text-brand-primary rounded-full shadow-lg hover:scale-110 transition-all border border-brand-dark/5">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+              </button>
+              <span className="px-4 py-2 bg-white rounded-full text-xs font-bold border border-brand-dark/10 flex items-center gap-2">
                  <span className="w-2 h-2 rounded-full bg-brand-accent animate-pulse"></span>
                  ROOM: {gameState.roomCode}
               </span>
@@ -564,96 +608,299 @@ const App: React.FC = () => {
               </button>
             </div>
           </header>
-
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4">
             {gameState.players.map((p, i) => (
-              <div key={p.id} className="bg-white p-5 rounded-[2rem] shadow-xl flex flex-col items-center gap-3 relative overflow-hidden border border-brand-dark/5 animate-in zoom-in-95" style={{ animationDelay: `${i * 100}ms` }}>
+              <div key={p.id} className="bg-white p-5 rounded-[2rem] shadow-xl flex flex-col items-center gap-3 relative animate-in zoom-in-95" style={{ animationDelay: `${i * 100}ms` }}>
                 <AvatarDisplay avatar={p.avatar} color={p.color} size="md" />
-                <span className="font-heading font-bold text-sm truncate w-full text-center text-brand-dark/80">{p.name}</span>
-                <div className={`text-[10px] font-black px-3 py-1 rounded-full ${p.isReady ? 'bg-brand-accent text-brand-dark' : 'bg-brand-coral/10 text-brand-coral border border-brand-coral/20'}`}>
-                  {p.isReady ? 'READY' : 'WAITING'}
-                </div>
-                {p.isAI && <div className="absolute top-0 right-0 p-1.5 bg-brand-dark/5 text-brand-dark/40 text-[8px] font-black tracking-widest uppercase">AI</div>}
+                <span className="font-heading font-bold text-sm truncate w-full text-center">{p.name}</span>
+                <div className={`text-[10px] font-black px-3 py-1 rounded-full ${p.isReady ? 'bg-brand-accent text-brand-dark' : 'bg-brand-coral/10 text-brand-coral'}`}>{p.isReady ? 'READY' : 'WAITING'}</div>
+                {p.isAI && <div className="absolute top-0 right-0 p-1.5 bg-brand-dark/5 text-brand-dark/40 text-[8px] font-black uppercase">AI</div>}
               </div>
             ))}
             <button onClick={addAIPlayer} className="border-2 border-dashed border-brand-dark/10 rounded-[2rem] p-5 flex flex-col items-center justify-center gap-2 hover:border-brand-primary transition-all group bg-white/30 backdrop-blur-sm">
               <div className="w-12 h-12 rounded-full bg-brand-dark/5 flex items-center justify-center group-hover:bg-brand-primary/10 transition-colors">
                 <svg className="w-6 h-6 text-brand-dark/20 group-hover:text-brand-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
               </div>
-              <span className="text-[10px] font-black text-brand-dark/20 group-hover:text-brand-primary uppercase tracking-widest">Add Computer</span>
+              <span className="text-[10px] font-black text-brand-dark/20 group-hover:text-brand-primary uppercase tracking-widest">Add Bot</span>
             </button>
           </div>
-
           <div className="bg-white/90 backdrop-blur-md rounded-[2.5rem] p-8 text-center space-y-6 border border-white/50 shadow-2xl relative overflow-hidden">
             <h2 className="text-2xl font-heading font-bold text-brand-primary">Match Outlook</h2>
             <div className="flex items-center justify-center gap-12">
-              <div className="text-center">
-                <p className="text-[10px] text-brand-dark/30 font-black uppercase tracking-[0.2em] mb-1">Duration</p>
-                <p className="text-3xl font-heading font-bold text-brand-dark">{gameState.maxTimer}s</p>
-              </div>
-              <div className="text-center">
-                <p className="text-[10px] text-brand-dark/30 font-black uppercase tracking-[0.2em] mb-1">Rounds</p>
-                <p className="text-3xl font-heading font-bold text-brand-dark">{gameState.maxRounds}</p>
-              </div>
-              <div className="text-center">
-                <p className="text-[10px] text-brand-dark/30 font-black uppercase tracking-[0.2em] mb-1">Mode</p>
-                <p className="text-3xl font-heading font-bold text-brand-dark capitalize">{gameState.scoringMode}</p>
-              </div>
+              <div className="text-center"><p className="text-[10px] text-brand-dark/30 font-black uppercase mb-1">Duration</p><p className="text-3xl font-heading font-bold">{gameState.maxTimer}s</p></div>
+              <div className="text-center"><p className="text-[10px] text-brand-dark/30 font-black uppercase mb-1">Rounds</p><p className="text-3xl font-heading font-bold">{gameState.maxRounds}</p></div>
+              <div className="text-center"><p className="text-[10px] text-brand-dark/30 font-black uppercase mb-1">Mode</p><p className="text-3xl font-heading font-bold capitalize">{gameState.scoringMode}</p></div>
             </div>
-            {gameState.selectedTopics.length > 0 && (
-              <div className="pt-4 border-t border-brand-dark/5 flex flex-wrap justify-center gap-2">
-                 {gameState.selectedTopics.map(t => (
-                   <span key={t} className="bg-brand-primary/5 text-brand-primary text-[10px] font-bold px-3 py-1 rounded-full border border-brand-primary/10 uppercase tracking-widest">{t}</span>
-                 ))}
-              </div>
-            )}
           </div>
-
           <div className="sticky bottom-8 w-full flex justify-center">
-            <button onClick={startRound} disabled={gameState.players.length < 2}
-              className="bg-brand-primary text-white px-16 py-6 rounded-full font-heading font-bold text-2xl shadow-2xl shadow-brand-primary/40 hover:scale-105 active:scale-95 transition-all disabled:opacity-50"
-            >
-              Launch Match
-            </button>
+            <button onClick={startRound} disabled={gameState.players.length < 2} className="bg-brand-primary text-white px-16 py-6 rounded-full font-heading font-bold text-2xl shadow-2xl hover:scale-105 active:scale-95 transition-all disabled:opacity-50">Proceed to Next Venn</button>
           </div>
         </div>
       </div>
     );
   }
 
-  // --- Gameplay Phases ---
+  if (gameState.phase === 'SETUP') {
+    const inviteUrl = `${window.location.origin}/#join=${gameState.roomCode}`;
+    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(inviteUrl)}`;
+    
+    const estTotalSeconds = (gameState.maxTimer + 4 + 8) * gameState.maxRounds;
+    const estMinutes = Math.floor(estTotalSeconds / 60);
+    const selectedPreset = TIMER_PRESETS.find(p => p.value === gameState.maxTimer);
+
+    return (
+      <div className="min-h-screen p-6 bg-brand-cream max-w-2xl mx-auto space-y-6">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <Logo size="sm" showText={false} />
+            <h2 className="text-2xl font-heading font-bold text-brand-dark">
+              {setupStep === 4 ? 'Match Lobby' : 'Match Settings'}
+            </h2>
+          </div>
+          <div className="flex gap-2">
+            {[1, 2, 3, 4].map(step => (
+                <div key={step} className={`h-1.5 w-6 rounded-full ${setupStep >= step ? 'bg-brand-primary' : 'bg-brand-dark/10'} transition-all duration-300`} />
+            ))}
+          </div>
+        </div>
+
+        <div className="min-h-[500px]">
+          {setupStep === 1 && (
+             <div className="bg-white p-8 rounded-[2.5rem] shadow-xl space-y-10 animate-in fade-in slide-in-from-right-4">
+              <div className="space-y-1 text-center">
+                <h3 className="text-3xl font-heading font-bold text-brand-dark tracking-tight">Match Duration</h3>
+                <p className="text-sm text-brand-dark/40 font-medium">How much focus time for each spark?</p>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {TIMER_PRESETS.map((p) => {
+                  const isActive = gameState.maxTimer === p.value;
+                  return (
+                    <button 
+                      key={p.value}
+                      onClick={() => setGameState(prev => ({...prev, maxTimer: p.value}))}
+                      className={`relative flex flex-col items-center p-4 rounded-3xl border-2 transition-all duration-200 group ${isActive ? 'border-brand-primary bg-brand-primary/5 shadow-lg scale-[1.05] z-10' : 'border-brand-dark/5 bg-white hover:border-brand-primary/30'}`}
+                    >
+                      <span className={`text-2xl mb-1 transition-transform duration-200 ${isActive ? 'scale-110' : 'group-hover:scale-105 opacity-60'}`}>{p.icon}</span>
+                      <span className={`text-[10px] font-black uppercase tracking-widest mb-1 ${isActive ? 'text-brand-primary' : 'text-brand-dark/30'}`}>{p.label}</span>
+                      <span className={`text-3xl font-heading font-bold ${isActive ? 'text-brand-primary' : 'text-brand-dark/60'}`}>{p.value}<span className="text-sm">s</span></span>
+                      {isActive && <div className="absolute -top-1 -right-1 w-3 h-3 bg-brand-primary rounded-full border-2 border-white shadow-sm" />}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="h-px bg-brand-dark/5 w-full" />
+
+              <div className="space-y-4">
+                <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-black text-brand-dark/30 uppercase tracking-[0.2em] px-1">Rounds Per Match</label>
+                    <div className="grid grid-cols-4 gap-3">
+                        {[3, 5, 8, 12].map(r => (
+                            <button 
+                                key={r}
+                                onClick={() => setGameState(prev => ({...prev, maxRounds: r}))}
+                                className={`py-3 rounded-full border-2 font-heading font-bold text-lg transition-all duration-200 ${gameState.maxRounds === r ? 'bg-brand-primary border-brand-primary text-white shadow-[0_4px_12px_rgba(85,61,241,0.3)]' : 'bg-white border-brand-dark/5 text-brand-dark/40'}`}
+                            >
+                                {r}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {setupStep === 2 && (
+            <div className="bg-white p-6 rounded-3xl shadow-xl space-y-8 animate-in fade-in slide-in-from-right-4">
+              <div className="space-y-4">
+                <h3 className="text-xl font-heading font-bold">Game Style</h3>
+                <div className="space-y-3">
+                  <button onClick={() => setGameState(prev => ({...prev, scoringMode: 'competitive'}))}
+                    className={`w-full p-5 rounded-3xl border-2 text-left transition-all ${gameState.scoringMode === 'competitive' ? 'bg-brand-primary/5 border-brand-primary shadow-sm' : 'border-brand-dark/5'}`}
+                  >
+                    <div className="flex justify-between items-center"><span className="font-bold text-lg">Competitive Arena</span></div>
+                    <p className="text-sm text-brand-dark/60 mt-1">Voting, leaderboards, and speed bonuses.</p>
+                  </button>
+                  <button onClick={() => setGameState(prev => ({...prev, scoringMode: 'casual'}))}
+                    className={`w-full p-5 rounded-3xl border-2 text-left transition-all ${gameState.scoringMode === 'casual' ? 'bg-brand-primary/5 border-brand-primary shadow-sm' : 'border-brand-dark/5'}`}
+                  >
+                    <div className="flex justify-between items-center"><span className="font-bold text-lg">Casual Playground</span></div>
+                    <p className="text-sm text-brand-dark/60 mt-1">Focus on fun and creativity without the pressure.</p>
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <h3 className="text-xl font-heading font-bold">Moderator Tone</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={() => setGameState(prev => ({...prev, moderatorTone: 'funny'}))}
+                    className={`p-5 rounded-3xl border-2 text-center transition-all ${gameState.moderatorTone === 'funny' ? 'bg-brand-primary/5 border-brand-primary shadow-sm' : 'border-brand-dark/5'}`}
+                  >
+                    <div className="text-2xl mb-1">🤡</div>
+                    <div className="font-bold">Funny</div>
+                    <p className="text-[10px] text-brand-dark/40 uppercase mt-1">Witty & Roasty</p>
+                  </button>
+                  <button onClick={() => setGameState(prev => ({...prev, moderatorTone: 'serious'}))}
+                    className={`p-5 rounded-3xl border-2 text-center transition-all ${gameState.moderatorTone === 'serious' ? 'bg-brand-primary/5 border-brand-primary shadow-sm' : 'border-brand-dark/5'}`}
+                  >
+                    <div className="text-2xl mb-1">🧐</div>
+                    <div className="font-bold">Serious</div>
+                    <p className="text-[10px] text-brand-dark/40 uppercase mt-1">Analytical & Deep</p>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {setupStep === 3 && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+              <div className="bg-white p-6 rounded-3xl shadow-xl space-y-4">
+                <h3 className="text-xl font-heading font-bold">Inspiration Topics</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  {PRESET_COLLECTIONS.map(pack => (
+                    <button key={pack.id} onClick={() => setGameState(prev => ({...prev, selectedTopics: pack.topics.slice(0, 5)}))}
+                      className={`p-4 rounded-3xl border-2 text-left transition-all ${gameState.selectedTopics.every(t => pack.topics.includes(t)) ? 'bg-brand-primary/5 border-brand-primary' : 'border-brand-dark/5'}`}
+                    >
+                      <span className="text-2xl">{pack.icon}</span>
+                      <div className="font-bold mt-2">{pack.name}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {setupStep === 4 && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="bg-white p-6 rounded-[2rem] shadow-xl space-y-4 border-2 border-brand-primary/10 text-center">
+                        <h3 className="font-heading font-bold">Challenge Friends</h3>
+                        <div className="bg-brand-cream p-4 rounded-3xl flex justify-center">
+                            <img src={qrCodeUrl} alt="Join QR Code" className="w-24 h-24" />
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={handleCopyLink} className="flex-1 py-3 bg-white border border-brand-dark/5 rounded-xl text-[10px] font-black uppercase">Copy</button>
+                            <button onClick={handleMessengerInvite} className="flex-1 py-3 bg-brand-messenger/10 text-brand-messenger rounded-xl text-[10px] font-black uppercase">Msg</button>
+                        </div>
+                    </div>
+                    <div className="bg-white p-6 rounded-[2rem] shadow-xl space-y-4 border-2 border-brand-dark/5 text-center flex flex-col justify-center">
+                        <h3 className="font-heading font-bold">Challenge AI</h3>
+                        <button onClick={addAIPlayer} className="w-full py-4 bg-brand-dark text-white rounded-xl text-[10px] font-black uppercase hover:scale-105 transition-all">Add Bot</button>
+                    </div>
+                </div>
+            </div>
+          )}
+        </div>
+        
+        <div className="flex gap-4">
+          <button onClick={() => setSetupStep(prev => Math.max(1, prev - 1))} className="flex-1 py-4 border-2 border-brand-dark/10 rounded-2xl font-bold">Back</button>
+          <button onClick={() => { if (setupStep === 4) setGameState(prev => ({...prev, phase: 'LOBBY'})); else setSetupStep(prev => prev + 1); }} className="flex-1 py-4 bg-brand-primary text-white rounded-2xl font-bold shadow-lg">Next</button>
+        </div>
+      </div>
+    );
+  }
+
   if (gameState.phase === 'ROUND') {
-    const hasSubmitted = gameState.submissions.some(s => s.playerId === currentUser.id);
+    const hasSubmitted = gameState.submissions.some(s => s.playerId === currentUser?.id);
     return (
       <div className="min-h-screen flex flex-col bg-brand-cream">
         <header className="p-4 flex items-center justify-between bg-white/50 backdrop-blur border-b border-brand-dark/5">
-          <div className="bg-brand-primary text-white text-xs font-bold px-4 py-1.5 rounded-full uppercase tracking-widest shadow-sm">Round {gameState.round}</div>
+          <Logo size="sm" />
           <Timer current={gameState.timer} max={gameState.maxTimer} />
-          <div className="text-xs font-bold text-brand-dark/40 bg-white px-4 py-1.5 rounded-full border border-brand-dark/5 shadow-sm">
-            {gameState.submissions.length} / {gameState.players.length} SUBMITTED
-          </div>
+          <div className="text-xs font-bold text-brand-dark/40 bg-white px-4 py-1.5 rounded-full border border-brand-dark/5">{gameState.submissions.length} / {gameState.players.length}</div>
         </header>
-        <main className="flex-1 flex flex-col lg:flex-row items-center justify-center p-4 lg:p-12 gap-12">
+        <main className="flex-1 flex flex-col lg:flex-row items-center justify-center p-4 lg:p-12 gap-12 overflow-y-auto">
           <div className="w-full flex-1"><VennDiagram imageA={gameState.currentImages![0]} imageB={gameState.currentImages![1]} /></div>
           <div className="w-full max-w-lg space-y-4">
             {hasSubmitted ? (
               <div className="bg-white/80 backdrop-blur p-12 rounded-[2.5rem] text-center space-y-4 shadow-2xl border-t-8 border-brand-accent animate-pulse">
                 <h3 className="text-3xl font-heading font-bold text-brand-dark">Input Recorded</h3>
-                <p className="text-brand-dark/40">Analyzing your perspective alongside others...</p>
+                <p className="text-brand-dark/40 italic">Waiting for others...</p>
               </div>
             ) : (
               <div className="bg-white p-8 rounded-[2.5rem] shadow-2xl space-y-6 animate-in fade-in slide-in-from-bottom-8 duration-500">
-                <h3 className="text-2xl font-heading font-bold text-brand-primary">Find the Link</h3>
-                <textarea 
-                  value={submissionText} onChange={(e) => setSubmissionText(e.target.value)} maxLength={250}
-                  placeholder="What connects these two scenes?"
-                  className="w-full h-40 p-6 bg-brand-cream rounded-[2rem] border-2 border-brand-dark/5 focus:border-brand-primary outline-none resize-none font-medium text-lg"
-                />
-                <button onClick={handleSubmit} disabled={!submissionText.trim()}
-                  className="w-full py-5 bg-brand-accent text-brand-dark font-heading font-bold text-xl rounded-2xl shadow-lg hover:brightness-105 transition-all disabled:opacity-50"
-                >
-                  Confirm Entry
-                </button>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-2xl font-heading font-bold text-brand-primary">The Link</h3>
+                  <div className="flex bg-brand-cream p-1 rounded-xl gap-1 overflow-x-auto custom-scrollbar">
+                    <button onClick={() => setSubmissionType('text')} className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${submissionType === 'text' ? 'bg-brand-primary text-white shadow-sm' : 'text-brand-dark/40'}`}>Text</button>
+                    <button onClick={() => setSubmissionType('gif')} className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${submissionType === 'gif' ? 'bg-brand-primary text-white shadow-sm' : 'text-brand-dark/40'}`}>GIF</button>
+                    <button onClick={() => setSubmissionType('image')} className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${submissionType === 'image' ? 'bg-brand-primary text-white shadow-sm' : 'text-brand-dark/40'}`}>Image</button>
+                  </div>
+                </div>
+
+                {submissionType === 'text' ? (
+                  <div className="relative">
+                    <textarea value={submissionText} onChange={(e) => setSubmissionText(e.target.value)} maxLength={250} placeholder="What connects these?" className="w-full h-40 p-6 bg-brand-cream rounded-[2rem] border-2 border-brand-dark/5 focus:border-brand-primary outline-none font-medium text-lg" />
+                    <div className="absolute bottom-4 right-6 text-[10px] font-black tracking-widest text-brand-dark/20 uppercase">{submissionText.length} / 250</div>
+                  </div>
+                ) : submissionType === 'gif' ? (
+                  <div className="space-y-4">
+                    <div className="flex gap-2">
+                      <input 
+                        type="text" 
+                        placeholder="Search for the perfect reaction..." 
+                        value={gifSearchQuery}
+                        onChange={(e) => setGifSearchQuery(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleGifSearch()}
+                        className="flex-1 px-4 py-3 bg-brand-cream rounded-xl border-2 border-transparent focus:border-brand-primary outline-none transition-all text-sm"
+                      />
+                      <button 
+                        onClick={handleGifSearch} 
+                        disabled={isSearchingGifs || !gifSearchQuery.trim()}
+                        className="bg-brand-primary text-white px-6 rounded-xl font-bold text-xs hover:brightness-110 active:scale-95 transition-all disabled:opacity-50"
+                      >
+                        {isSearchingGifs ? (
+                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        ) : 'Search'}
+                      </button>
+                    </div>
+                    
+                    <div className="bg-brand-cream/50 rounded-2xl p-2 min-h-[200px] max-h-60 overflow-y-auto custom-scrollbar">
+                      {isSearchingGifs ? (
+                        <div className="grid grid-cols-2 gap-2">
+                          {[1,2,3,4].map(i => (
+                            <div key={i} className="aspect-square bg-brand-dark/5 animate-pulse rounded-xl" />
+                          ))}
+                        </div>
+                      ) : gifResults.length > 0 ? (
+                        <div className="grid grid-cols-2 gap-2">
+                          {gifResults.map((url, i) => (
+                            <button 
+                              key={i} 
+                              onClick={() => setSubmissionMedia(url)} 
+                              className={`relative aspect-square rounded-xl overflow-hidden border-4 transition-all group ${submissionMedia === url ? 'border-brand-primary shadow-lg scale-95' : 'border-transparent hover:border-brand-dark/10'}`}
+                            >
+                              <img src={url} className="w-full h-full object-cover" alt="GIF result" />
+                              {submissionMedia === url && (
+                                <div className="absolute inset-0 bg-brand-primary/20 flex items-center justify-center">
+                                   <div className="bg-brand-primary text-white p-1 rounded-full shadow-lg">
+                                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
+                                   </div>
+                                </div>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="h-40 flex flex-col items-center justify-center text-center p-6 space-y-2">
+                           <span className="text-3xl grayscale opacity-50">🔍</span>
+                           <p className="text-[10px] font-black text-brand-dark/20 uppercase tracking-widest">
+                             {gifSearchQuery ? "No GIFs found. Try another spark!" : "Search for the ultimate reaction"}
+                           </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex flex-col items-center justify-center h-40 bg-brand-cream border-2 border-dashed border-brand-dark/10 rounded-[2rem] relative group">
+                      {submissionMedia ? <img src={submissionMedia} className="w-full h-full object-cover rounded-[2rem]" alt="Selected" /> : <span className="text-[10px] font-black text-brand-dark/30">UPLOAD OR PASTE LINK</span>}
+                      <input type="file" accept="image/*" onChange={handleFileChange} className="absolute inset-0 opacity-0 cursor-pointer" />
+                    </div>
+                  </div>
+                )}
+                <button onClick={handleSubmit} disabled={submissionType === 'text' ? !submissionText.trim() : !submissionMedia.trim()} className="w-full py-5 bg-brand-accent text-brand-dark font-heading font-bold text-xl rounded-2xl shadow-lg disabled:opacity-50">Confirm Entry</button>
               </div>
             )}
           </div>
@@ -662,23 +909,31 @@ const App: React.FC = () => {
     );
   }
 
+  if (gameState.phase === 'ROUND_TRANSITION') {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-8 bg-brand-cream text-center animate-in fade-in zoom-in-95 duration-700">
+        <Logo size="lg" className="mb-12" />
+        <div className="space-y-4">
+          <p className="text-[10px] font-black text-brand-dark/30 uppercase tracking-[0.4em]">Get Ready</p>
+          <h2 className="text-8xl font-heading font-bold text-brand-primary tracking-tighter">Round {gameState.round}</h2>
+        </div>
+        <button onClick={startRound} className="mt-16 bg-brand-primary text-white px-20 py-6 rounded-full font-heading font-bold text-3xl shadow-2xl border-b-8 border-brand-dark/20">Go</button>
+      </div>
+    );
+  }
+
   if (gameState.phase === 'REVEAL') {
     return (
-      <div className="min-h-screen bg-brand-dark p-8 flex flex-col items-center justify-center text-white">
-        <h2 className="text-5xl font-heading font-bold mb-16 animate-pulse text-brand-accent">Unveiling Connections</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 w-full max-w-6xl">
-          {gameState.submissions.map((sub, i) => {
-            const player = gameState.players.find(p => p.id === sub.playerId);
-            return (
-              <div key={sub.playerId} className="bg-white/10 backdrop-blur-2xl border border-white/10 p-8 rounded-[2rem] animate-in fade-in slide-in-from-bottom-12 duration-500" style={{ animationDelay: `${i * 200}ms`, animationFillMode: 'both' }}>
-                <div className="flex items-center gap-4 mb-6">
-                  <AvatarDisplay avatar={player?.avatar || '❓'} color={player?.color || 'bg-slate-400'} size="md" />
-                  <span className="font-heading font-bold text-brand-accent uppercase tracking-widest text-[10px]">Author Hidden</span>
-                </div>
-                <div className="text-2xl font-medium leading-relaxed italic text-white/90">"{sub.content}"</div>
-              </div>
-            );
-          })}
+      <div className="min-h-screen bg-brand-dark p-8 flex flex-col items-center justify-center text-white overflow-hidden">
+        <Logo size="md" className="mb-12" />
+        <h2 className="text-4xl sm:text-5xl font-heading font-bold mb-16 animate-pulse text-brand-accent tracking-tighter">The Unveiling</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 w-full max-w-6xl overflow-y-auto max-h-[70vh] p-4 custom-scrollbar">
+          {gameState.submissions.map((sub, i) => (
+            <div key={sub.playerId} className="bg-white/10 backdrop-blur-2xl border border-white/10 p-6 rounded-[2rem] animate-in fade-in slide-in-from-bottom-12 duration-700 flex flex-col gap-4" style={{ animationDelay: `${i * 300}ms`, animationFillMode: 'both' }}>
+              <div className="flex items-center gap-4 mb-2"><div className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">👤</div><span className="font-heading font-bold text-brand-accent uppercase tracking-widest text-[8px] opacity-60">Anonymous</span></div>
+              <div className="flex-1 flex items-center justify-center">{renderMedia(sub, 'reveal')}</div>
+            </div>
+          ))}
         </div>
       </div>
     );
@@ -691,46 +946,47 @@ const App: React.FC = () => {
     }, {} as Record<string, number>);
 
     return (
-      <div className="min-h-screen p-8 bg-brand-cream flex flex-col items-center">
+      <div className="min-h-screen p-8 bg-brand-cream flex flex-col items-center overflow-y-auto">
+        <header className="w-full max-w-6xl flex justify-between items-center mb-8"><Logo size="sm" /><div className="text-xs font-bold text-brand-dark/40 uppercase tracking-widest">Judgment</div></header>
         <div className="w-full max-w-6xl space-y-12">
           <VennDiagram imageA={gameState.currentImages![0]} imageB={gameState.currentImages![1]} label={gameState.intersectionLabel} showGlow={true} />
-          <div className="text-center space-y-4">
-             <h2 className="text-6xl font-heading font-bold text-brand-primary">{gameState.intersectionLabel || 'Spark Detected'}</h2>
-          </div>
+          {gameState.aiModeratorVerdict && (
+            <div className="w-full max-w-3xl bg-white/80 backdrop-blur p-8 rounded-[2.5rem] shadow-2xl border-2 border-brand-primary mx-auto">
+               <div className="flex items-center gap-3 mb-2">
+                 <span className="text-2xl">{gameState.moderatorTone === 'funny' ? '🤡' : '🧐'}</span>
+                 <h3 className="font-heading font-bold text-xl text-brand-primary">AI Moderator Verdict ({gameState.moderatorTone})</h3>
+               </div>
+               <p className="text-brand-dark font-medium italic border-l-4 border-brand-accent pl-4">"{gameState.aiModeratorVerdict.reasoning}"</p>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             {gameState.submissions.map((sub) => {
               const player = gameState.players.find(p => p.id === sub.playerId);
               const voteCount = winners[sub.playerId] || 0;
               const hasVotedThis = votedId === sub.playerId;
-              const isOwn = sub.playerId === currentUser.id;
+              const isOwn = sub.playerId === currentUser?.id;
+              const modScore = gameState.aiModeratorVerdict?.scores[sub.playerId];
+              
               return (
-                <div key={sub.playerId} className={`bg-white p-8 rounded-[2.5rem] shadow-xl border-2 transition-all flex flex-col justify-between ${hasVotedThis ? 'border-brand-primary ring-8 ring-brand-primary/5' : 'border-transparent'}`}>
-                  <div className="space-y-6">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <AvatarDisplay avatar={player?.avatar || '❓'} color={player?.color || 'bg-slate-400'} size="sm" />
-                        <span className="font-heading font-bold text-brand-dark/80">{player?.name}</span>
+                <div key={sub.playerId} className={`bg-white p-6 rounded-[2.5rem] shadow-xl border-4 flex flex-col justify-between ${hasVotedThis || gameState.aiModeratorVerdict?.winnerId === sub.playerId ? 'border-brand-primary' : 'border-transparent'}`}>
+                  <div>
+                    <div className="flex items-center justify-between border-b pb-4 mb-4">
+                      <div className="flex items-center gap-3"><AvatarDisplay avatar={player?.avatar || '❓'} color={player?.color || 'bg-slate-400'} size="sm" /><span className="font-bold text-sm">{player?.name}</span></div>
+                      <div className="flex gap-1">
+                        {voteCount > 0 && <span className="bg-brand-primary text-white text-[8px] px-2 py-1 rounded-full">{voteCount} VOTE</span>}
+                        {modScore !== undefined && <span className="bg-brand-accent text-brand-dark text-[8px] px-2 py-1 rounded-full">{modScore}/10</span>}
                       </div>
-                      {voteCount > 0 && <div className="bg-brand-primary text-white text-xs font-bold px-3 py-1.5 rounded-full">{voteCount} VOTES</div>}
                     </div>
-                    <p className="text-2xl font-medium leading-snug italic text-brand-dark/90">"{sub.content}"</p>
+                    {renderMedia(sub, 'result')}
                   </div>
-                  {gameState.scoringMode === 'competitive' && (
-                    <button onClick={() => handleVote(sub.playerId)} disabled={!!votedId || isOwn}
-                      className={`w-full py-4 mt-8 rounded-2xl font-bold transition-all ${hasVotedThis ? 'bg-brand-primary text-white' : isOwn ? 'bg-brand-dark/5 text-brand-dark/20' : 'bg-brand-cream border border-brand-dark/10 text-brand-dark'}`}
-                    >
-                      {hasVotedThis ? 'Voted' : isOwn ? 'Your Entry' : 'Cast Vote'}
-                    </button>
+                  {!gameState.aiModeratorVerdict && (
+                    <button onClick={() => handleVote(sub.playerId)} disabled={!!votedId || isOwn} className={`w-full py-4 mt-6 rounded-2xl font-black text-xs uppercase ${hasVotedThis ? 'bg-brand-primary text-white' : 'bg-brand-cream text-brand-dark'}`}>Vote</button>
                   )}
                 </div>
               );
             })}
           </div>
-          <div className="sticky bottom-12 w-full flex justify-center py-4">
-            <button onClick={finishRound} className="bg-brand-dark text-white px-16 py-6 rounded-full font-heading font-bold text-2xl shadow-2xl hover:scale-105 active:scale-95 transition-all">
-               Continue Journey
-            </button>
-          </div>
+          <div className="w-full flex justify-center py-12"><button onClick={finishRound} className="bg-brand-dark text-white px-16 py-6 rounded-full font-heading font-bold text-2xl shadow-2xl">Next</button></div>
         </div>
       </div>
     );
@@ -740,27 +996,18 @@ const App: React.FC = () => {
     const sortedPlayers = [...gameState.players].sort((a, b) => b.score - a.score);
     return (
       <div className="min-h-screen p-8 bg-brand-cream flex flex-col items-center justify-center">
-        <div className="w-full max-w-3xl space-y-12 animate-in zoom-in-95 duration-1000">
-          <div className="text-center space-y-6">
-            <div className="text-8xl mb-4 animate-bounce">🏆</div>
-            <h1 className="text-7xl font-heading font-bold text-brand-primary tracking-tight">Venn Icons</h1>
-            <p className="text-xl text-brand-dark/40 font-medium">Final Rankings: {gameState.roomCode}</p>
-          </div>
+        <Logo size="lg" className="mb-12" />
+        <div className="w-full max-w-3xl space-y-12">
+          <h1 className="text-6xl font-heading font-bold text-brand-primary text-center">Venn Masters</h1>
           <div className="space-y-6">
             {sortedPlayers.map((p, i) => (
-              <div key={p.id} className={`bg-white p-8 rounded-[3rem] shadow-2xl flex items-center justify-between border-b-8 duration-500`} style={{ animationDelay: `${i * 200}ms`, borderBottomColor: p.color }}>
-                <div className="flex items-center gap-6">
-                  <div className={`w-14 h-14 flex items-center justify-center font-heading font-bold text-4xl ${i === 0 ? 'text-yellow-500' : 'text-brand-dark/10'}`}>#{i + 1}</div>
-                  <AvatarDisplay avatar={p.avatar} color={p.color} size="lg" />
-                  <h3 className="font-heading font-bold text-3xl text-brand-dark">{p.name}</h3>
-                </div>
-                <div className="text-5xl font-heading font-bold text-brand-primary">{p.score}</div>
+              <div key={p.id} className="bg-white p-8 rounded-[3rem] shadow-2xl flex items-center justify-between border-b-8" style={{ borderBottomColor: p.color }}>
+                <div className="flex items-center gap-6"><span className="text-4xl font-bold opacity-10">#{i + 1}</span><AvatarDisplay avatar={p.avatar} color={p.color} size="lg" /><h3 className="text-2xl font-bold">{p.name}</h3></div>
+                <div className="text-right"><span className="text-4xl font-heading font-bold text-brand-primary">{p.score}</span><p className="text-[10px] font-black opacity-20 uppercase">Pts</p></div>
               </div>
             ))}
           </div>
-          <button onClick={() => window.location.reload()} className="w-full py-6 bg-brand-primary text-white rounded-[2.5rem] font-heading font-bold text-3xl shadow-2xl hover:brightness-110 active:scale-95 transition-all">
-             New Game
-          </button>
+          <button onClick={() => window.location.reload()} className="w-full py-6 bg-brand-primary text-white rounded-[2.5rem] font-heading font-bold text-2xl shadow-2xl">New Match</button>
         </div>
       </div>
     );
