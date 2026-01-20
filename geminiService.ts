@@ -1,143 +1,56 @@
-
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { ImageItem, Submission, AIModeratorVerdict } from "./types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-export async function generateIntersectionLabel(image1: ImageItem, image2: ImageItem, submissions: Submission[]) {
-  const prompt = `
-    Two images are shown in a Venn diagram. 
-    Image 1: ${image1.title} (${image1.tags.join(', ')})
-    Image 2: ${image2.title} (${image2.tags.join(', ')})
+// Audio Helper: Decode Raw PCM from Gemini TTS
+async function playRawAudio(base64Data: string) {
+  try {
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    const binaryString = atob(base64Data);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
     
-    Players have submitted creative connections. Some are text, others are media links (images/videos/gifs).
+    const dataInt16 = new Int16Array(bytes.buffer);
+    const buffer = audioContext.createBuffer(1, dataInt16.length, 24000);
+    const channelData = buffer.getChannelData(0);
+    for (let i = 0; i < dataInt16.length; i++) {
+      channelData[i] = dataInt16[i] / 32768.0;
+    }
     
-    Submissions:
-    ${submissions.map(s => `- Type: ${s.type}, Content: ${s.type === 'text' ? s.content : '[Visual Media Submitted]'}`).join('\n')}
-    
-    Tasks:
-    1. Determine a concise, clever, and catching label for the "intersection" of these two images based on player inputs and visual analysis.
-    2. Group the player submissions into 2-3 clusters based on similarity.
-  `;
+    const source = audioContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioContext.destination);
+    source.start();
+  } catch (e) {
+    console.error("Audio playback failed", e);
+  }
+}
 
+export async function announceWinner(verdict: string) {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
+      model: "gemini-2.5-flash-preview-tts",
+      contents: [{ parts: [{ text: `Announce this winner with high energy: ${verdict}` }] }],
       config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            intersectionLabel: { type: Type.STRING, description: "A catchy label for the intersection" },
-            clusters: {
-              type: Type.OBJECT,
-              description: "Grouping submissions by ID",
-              additionalProperties: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              }
-            }
-          },
-          required: ["intersectionLabel", "clusters"]
-        }
-      }
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+        },
+      },
     });
-
-    const json = JSON.parse(response.text || "{}");
-    return json;
-  } catch (error) {
-    console.error("Gemini API error:", error);
-    return { 
-      intersectionLabel: "Creative Chaos", 
-      clusters: { "Submissions": submissions.map(s => s.playerId) } 
-    };
+    const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (audioData) await playRawAudio(audioData);
+  } catch (e) {
+    console.error("TTS generation failed", e);
   }
 }
 
-export async function moderateSoloRound(
-  image1: ImageItem, 
-  image2: ImageItem, 
-  submissions: Submission[],
-  tone: 'serious' | 'funny' = 'funny'
-): Promise<AIModeratorVerdict> {
-  const toneInstruction = tone === 'funny' 
-    ? "Be hilarious, witty, and slightly roasty. Use puns and sarcasm." 
-    : "Be analytical, professional, and profound. Focus on the semiotics and deep connections.";
-
-  const prompt = `
-    You are an AI Game Moderator for "Venn with Friends". 
-    ${toneInstruction}
-    A human player is playing solo against AI bots.
-    Image 1: ${image1.title}
-    Image 2: ${image2.title}
-    
-    Evaluate these submissions. Assign a score from 0 to 10 for each based on creativity, wit, and how well it bridges the two images.
-    
-    Submissions:
-    ${submissions.map(s => `[Player ID: ${s.playerId}] Type: ${s.type}, Content: ${s.type === 'text' ? s.content : '[Visual Media]'}`).join('\n')}
-    
-    Return the scores for each Player ID, a brief reasoning for the winner (matching your assigned tone), and identify the winner.
-  `;
-
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            scores: {
-              type: Type.OBJECT,
-              description: "Mapping of PlayerID to score 0-10",
-              additionalProperties: { type: Type.NUMBER }
-            },
-            reasoning: { type: Type.STRING, description: "Reasoning for the choice based on tone" },
-            winnerId: { type: Type.STRING, description: "The PlayerID of the winner" }
-          },
-          required: ["scores", "reasoning", "winnerId"]
-        }
-      }
-    });
-
-    return JSON.parse(response.text || "{}");
-  } catch (error) {
-    console.error("Moderator Error:", error);
-    return {
-      scores: submissions.reduce((acc, s) => ({ ...acc, [s.playerId]: 5 }), {}),
-      reasoning: "The algorithm suggests everything is perfectly balanced.",
-      winnerId: submissions[0]?.playerId || ""
-    };
-  }
-}
-
-export async function generateAISubmission(image1: ImageItem, image2: ImageItem) {
-  const prompt = `
-    Find a clever creative intersection between these two images:
-    Image 1: ${image1.title}
-    Image 2: ${image2.title}
-    
-    Provide a single witty phrase (max 10 words) that describes what's in the middle.
-  `;
-
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-    });
-    return response.text?.trim() || "The perfect mix.";
-  } catch (error) {
-    return "Something in between!";
-  }
-}
-
-export async function searchGifs(query: string): Promise<string[]> {
-  const prompt = `Search for exactly 6 high-quality animated GIFs that match the mood: "${query}". 
-  Provide direct media URLs ending in .gif or direct Giphy/Tenor media links.
-  Only return a JSON array of strings containing the URLs. 
-  Example: ["https://media.giphy.com/media/xxx/giphy.gif", ...]`;
+export async function fetchTrendingTopics() {
+  const prompt = `Search for the top 5 most visually striking trending topics in pop culture or nature today. 
+  For each topic, provide a short name, an emoji, and 3 high-quality Unsplash image keywords.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -148,32 +61,127 @@ export async function searchGifs(query: string): Promise<string[]> {
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
-          items: { type: Type.STRING }
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              icon: { type: Type.STRING },
+              keywords: { type: Type.ARRAY, items: { type: Type.STRING } }
+            },
+            required: ["name", "icon", "keywords"]
+          }
         }
-      },
-    });
-
-    const urls: string[] = JSON.parse(response.text || "[]");
-    
-    // Supplement with grounding metadata if search yielded better links
-    const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    chunks.forEach(chunk => {
-      const uri = chunk.web?.uri;
-      if (uri && (uri.includes('giphy.com') || uri.includes('tenor.com')) && !urls.includes(uri)) {
-        urls.push(uri);
       }
     });
-
-    // Transform Giphy landing pages to direct gif links if possible
-    return urls.map(url => {
-      if (url.includes('giphy.com/gifs/')) {
-        const id = url.split('-').pop()?.split('/').pop();
-        if (id) return `https://media.giphy.com/media/${id}/giphy.gif`;
-      }
-      return url;
-    }).slice(0, 10);
+    return JSON.parse(response.text || "[]");
   } catch (error) {
-    console.error("GIF Search Error:", error);
+    console.error("Trending topics error:", error);
     return [];
   }
+}
+
+export async function visualizeIntersection(image1: ImageItem, image2: ImageItem, winningText: string) {
+  const prompt = `A cinematic, high-definition artistic masterpiece. It is the perfect visual fusion of:
+  - "${image1.title}": ${image1.description}
+  - "${image2.title}": ${image2.description}
+  The thematic bridge that unites them is: "${winningText}".
+  Create an evocative image of this new combined entity. No text. Highly detailed.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: { parts: [{ text: prompt }] },
+      config: { imageConfig: { aspectRatio: "1:1" } },
+    });
+
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
+    }
+    return null;
+  } catch (error) {
+    console.error("Visualizer error:", error);
+    return null;
+  }
+}
+
+export async function getLiveCommentary(image1: ImageItem, image2: ImageItem, submissions: Submission[]) {
+  const prompt = `Context: Players are finding connections between "${image1.title}" and "${image2.title}".
+  Submissions so far: ${submissions.map(s => s.content).join(", ")}.
+  Provide a witty, one-sentence "AI Hype" observation (max 12 words).`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+    });
+    return response.text?.trim() || "Things are getting interesting...";
+  } catch (e) { return "The fusion is imminent!"; }
+}
+
+export async function generateIntersectionLabel(image1: ImageItem, image2: ImageItem, submissions: Submission[]) {
+  const prompt = `Analyze assets "${image1.title}" and "${image2.title}" plus these submissions: ${submissions.map(s => s.content).join(", ")}.
+  Give the intersection a single punchy Name (e.g. "Cyber-Forest").`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: { intersectionLabel: { type: Type.STRING } },
+          required: ["intersectionLabel"]
+        }
+      }
+    });
+    return JSON.parse(response.text || '{"intersectionLabel": "The Void"}');
+  } catch (e) { return { intersectionLabel: "Fusion Point" }; }
+}
+
+export async function moderateSoloRound(image1: ImageItem, image2: ImageItem, submissions: Submission[], tone: 'serious' | 'funny' = 'funny'): Promise<AIModeratorVerdict> {
+  const prompt = `MODERATOR: Evaluate which submission best bridges "${image1.title}" and "${image2.title}".
+  Tone: ${tone}.
+  Submissions: ${submissions.map(s => `[${s.playerId}] ${s.content}`).join('\n')}
+  Output JSON scores (0-10) for everyone and pick the winnerId.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            playerScores: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { playerId: { type: Type.STRING }, score: { type: Type.NUMBER } } } },
+            reasoning: { type: Type.STRING },
+            winnerId: { type: Type.STRING }
+          }
+        }
+      }
+    });
+    const data = JSON.parse(response.text || "{}");
+    const scores: Record<string, number> = {};
+    data.playerScores?.forEach((s: any) => { scores[s.playerId] = s.score; });
+    return { scores, reasoning: data.reasoning, winnerId: data.winnerId };
+  } catch (e) {
+    return { scores: {}, reasoning: "You are all creative!", winnerId: submissions[0]?.playerId || "" };
+  }
+}
+
+export async function generateAISubmission(image1: ImageItem, image2: ImageItem) {
+  const prompt = `Intersection of "${image1.title}" and "${image2.title}". Max 8 words. Be brilliant.`;
+  const response = await ai.models.generateContent({ model: "gemini-3-flash-preview", contents: prompt });
+  return response.text?.trim() || "The perfect union.";
+}
+
+export async function searchGifs(query: string): Promise<string[]> {
+  const prompt = `Find 6 GIF URLs for: "${query}". Return JSON array.`;
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: prompt,
+    config: { tools: [{ googleSearch: {} }], responseMimeType: "application/json" }
+  });
+  return JSON.parse(response.text || "[]");
 }

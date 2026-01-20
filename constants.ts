@@ -1,4 +1,3 @@
-
 import { AvatarOption, GradientOption, ImageItem } from './types';
 
 export const AVATARS: AvatarOption[] = [
@@ -8,7 +7,7 @@ export const AVATARS: AvatarOption[] = [
   { emoji: '🐢', label: 'Turtle' }, { emoji: '🦉', label: 'Owl' }, { emoji: '🦖', label: 'T-Rex' },
   { emoji: '🦙', label: 'Llama' }, { emoji: '🦥', label: 'Sloth' }, { emoji: '🦔', label: 'Hedgehog' },
   { emoji: '🐧', label: 'Penguin' }, { emoji: '🐸', label: 'Frog' }, { emoji: '🐵', label: 'Monkey' },
-  { emoji: '🐹', label: 'Hamster' }, { emoji: '🐰', label: 'Rabbit' }, { emoji: '🐺', label: 'Wolf' },
+  { emoji: '🐹' , label: 'Hamster' }, { emoji: '🐰', label: 'Rabbit' }, { emoji: '🐺', label: 'Wolf' },
   { emoji: '🐻', label: 'Bear' }, { emoji: '🐷', label: 'Pig' }, { emoji: '🐱', label: 'Cat' }
 ];
 
@@ -24,31 +23,107 @@ export const GRADIENTS: GradientOption[] = [
 ];
 
 export const INITIAL_IMAGE_DECK: ImageItem[] = [
-  { id: '1', url: 'https://picsum.photos/id/10/800/800', title: 'Mountain Lake', tags: ['nature', 'water', 'landscape'] },
-  { id: '2', url: 'https://picsum.photos/id/1011/800/800', title: 'Woman with Dog', tags: ['people', 'animal', 'lifestyle'] },
-  { id: '3', url: 'https://picsum.photos/id/1012/800/800', title: 'Coffee and Book', tags: ['lifestyle', 'food', 'relax'] },
-  { id: '4', url: 'https://picsum.photos/id/1015/800/800', title: 'Deep Forest', tags: ['nature', 'green', 'mystery'] },
-  { id: '5', url: 'https://picsum.photos/id/1016/800/800', title: 'Canyon River', tags: ['nature', 'adventure', 'travel'] },
-  { id: '6', url: 'https://picsum.photos/id/1020/800/800', title: 'Bear in Wild', tags: ['animal', 'nature', 'danger'] },
-  { id: '7', url: 'https://picsum.photos/id/1025/800/800', title: 'Beach Sunset', tags: ['nature', 'water', 'sky'] },
-  { id: '8', url: 'https://picsum.photos/id/1033/800/800', title: 'Hot Air Balloon', tags: ['travel', 'adventure', 'sky'] },
-  { id: '9', url: 'https://picsum.photos/id/1035/800/800', title: 'Waterfall', tags: ['nature', 'water', 'motion'] },
-  { id: '10', url: 'https://picsum.photos/id/1039/800/800', title: 'Neon City', tags: ['city', 'technology', 'night'] },
-  { id: '11', url: 'https://picsum.photos/id/1044/800/800', title: 'Camping Fire', tags: ['nature', 'adventure', 'fire'] },
-  { id: '12', url: 'https://picsum.photos/id/1047/800/800', title: 'Snowy Peak', tags: ['nature', 'cold', 'mountain'] },
-  { id: '13', url: 'https://picsum.photos/id/1050/800/800', title: 'Skyline', tags: ['city', 'architecture', 'view'] },
-  { id: '14', url: 'https://picsum.photos/id/1054/800/800', title: 'Street Food', tags: ['food', 'city', 'culture'] },
-  { id: '15', url: 'https://picsum.photos/id/1059/800/800', title: 'Abstract Art', tags: ['art', 'creative', 'color'] },
-  { id: '16', url: 'https://picsum.photos/id/1062/800/800', title: 'Golden Gate', tags: ['travel', 'bridge', 'city'] },
-  { id: '17', url: 'https://picsum.photos/id/1067/800/800', title: 'Lush Garden', tags: ['nature', 'plants', 'peace'] },
-  { id: '18', url: 'https://picsum.photos/id/1074/800/800', title: 'Big Cat', tags: ['animal', 'wildlife', 'nature'] },
-  { id: '19', url: 'https://picsum.photos/id/1084/800/800', title: 'Walrus', tags: ['animal', 'ocean', 'arctic'] },
-  { id: '20', url: 'https://picsum.photos/id/111/800/800', title: 'Old Car', tags: ['vintage', 'technology', 'travel'] },
+  { 
+    id: 'h1', 
+    url: 'https://images.unsplash.com/photo-1477959858617-67f85cf4f1df?auto=format&fit=crop&w=1200&q=80', 
+    title: 'Neon Metropolis', 
+    description: 'A sprawling city grid pulsing with electric life.', 
+    tags: ['city', 'technology', 'night', 'urban'], 
+    mediaType: 'image' 
+  },
+  { 
+    id: 'hv1', 
+    url: 'https://cdn.pixabay.com/video/2021/04/12/70885-538166548_tiny.mp4', 
+    title: 'Circuit Pulse', 
+    description: 'Digital information flowing through fiber optic pathways.', 
+    tags: ['technology', 'abstract', 'glow', 'speed'], 
+    mediaType: 'video' 
+  },
+  { 
+    id: 'h2', 
+    url: 'https://images.unsplash.com/photo-1534067783941-51c9c23ecefd?auto=format&fit=crop&w=1200&q=80', 
+    title: 'Alpine Peak', 
+    description: 'A jagged mountain summit draped in permanent ice.', 
+    tags: ['nature', 'mountain', 'cold', 'white'], 
+    mediaType: 'image' 
+  },
+  { 
+    id: 'hv2', 
+    url: 'https://cdn.pixabay.com/video/2016/09/13/5155-183063071_tiny.mp4', 
+    title: 'Midnight Rain', 
+    description: 'Raindrops falling into neon-lit puddles in the dark.', 
+    tags: ['city', 'weather', 'moody', 'water'], 
+    mediaType: 'video' 
+  },
+  { 
+    id: 'h3', 
+    url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1200&q=80', 
+    title: 'Astronaut Voyager', 
+    description: 'A lone explorer drifting through the silent void.', 
+    tags: ['space', 'adventure', 'mystery', 'technology'], 
+    mediaType: 'image' 
+  },
+  { 
+    id: 'hv3', 
+    url: 'https://cdn.pixabay.com/video/2020/09/21/50630-462061614_tiny.mp4', 
+    title: 'Ember Dance', 
+    description: 'Slow-motion sparks rising from an ancient campfire.', 
+    tags: ['fire', 'heat', 'nature', 'dark'], 
+    mediaType: 'video' 
+  },
+  { 
+    id: 'h4', 
+    url: 'https://images.unsplash.com/photo-1439405326854-014607f694d7?auto=format&fit=crop&w=1200&q=80', 
+    title: 'Tidal Wave', 
+    description: 'The immense, crushing force of a breaking ocean wave.', 
+    tags: ['water', 'ocean', 'nature', 'power'], 
+    mediaType: 'image' 
+  },
+  { 
+    id: 'hv4', 
+    url: 'https://cdn.pixabay.com/video/2019/04/10/22616-328678036_tiny.mp4', 
+    title: 'Bioluminescent Abyss', 
+    description: 'Deep-sea jellies glowing with their own inner light.', 
+    tags: ['ocean', 'animal', 'glow', 'mystery'], 
+    mediaType: 'video' 
+  },
+  { 
+    id: 'h5', 
+    url: 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=1200&q=80', 
+    title: 'Digital Lava', 
+    description: 'Abstract molten textures flowing in vibrant reds.', 
+    tags: ['art', 'abstract', 'red', 'motion'], 
+    mediaType: 'image' 
+  },
+  { 
+    id: 'hv5', 
+    url: 'https://cdn.pixabay.com/video/2023/11/12/188730-883398939_tiny.mp4', 
+    title: 'Crystal Blizzard', 
+    description: 'Soft snow falling in a perfectly silent pine forest.', 
+    tags: ['winter', 'nature', 'peace', 'white'], 
+    mediaType: 'video' 
+  },
+  { 
+    id: 'h6', 
+    url: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=1200&q=80', 
+    title: 'Emerald Valley', 
+    description: 'Lush mountain ranges stretching into the mist.', 
+    tags: ['nature', 'green', 'peace', 'landscape'], 
+    mediaType: 'image' 
+  },
+  { 
+    id: 'h7', 
+    url: 'https://images.unsplash.com/photo-1504333638930-c8787321eee0?auto=format&fit=crop&w=1200&q=80', 
+    title: 'Ancient Sands', 
+    description: 'Timeless patterns carved into desert dunes.', 
+    tags: ['nature', 'travel', 'mystery', 'desert'], 
+    mediaType: 'image' 
+  }
 ];
 
 export const PRESET_COLLECTIONS = [
-  { id: 'nature', name: 'Nature Pack', icon: '🌲', topics: ['nature', 'animal', 'water', 'mountain'] },
-  { id: 'city', name: 'Urban Vibes', icon: '🏙️', topics: ['city', 'architecture', 'technology', 'night'] },
-  { id: 'chill', name: 'Relax & Cozy', icon: '☕', topics: ['lifestyle', 'food', 'art', 'peace'] },
-  { id: 'adventure', name: 'Explorer', icon: '🎒', topics: ['adventure', 'travel', 'mystery', 'wildlife'] },
+  { id: 'cinematic', name: 'Cinematic Deck', icon: '🎬', topics: ['nature', 'technology', 'glow', 'mountain'] },
+  { id: 'urban', name: 'Urban Life', icon: '🏙️', topics: ['city', 'architecture', 'night', 'urban'] },
+  { id: 'elemental', name: 'The Elements', icon: '🔥', topics: ['fire', 'water', 'winter', 'desert'] },
+  { id: 'cosmic', name: 'Deep Space', icon: '🚀', topics: ['space', 'abstract', 'mystery', 'technology'] },
 ];
