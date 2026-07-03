@@ -68,7 +68,7 @@ const VennDiagram: React.FC<VennDiagramProps> = ({ imageA, imageB, label, showGl
 
           {/* Intersection Generated Content */}
           {intersectionImage && (
-            <g className="animate-in fade-in zoom-in duration-1000">
+            <g className="animate-fade-zoom-in">
               <image 
                 href={intersectionImage} 
                 x="300" y="90" width="200" height="320" 
@@ -90,7 +90,7 @@ const VennDiagram: React.FC<VennDiagramProps> = ({ imageA, imageB, label, showGl
           {label && (
             <foreignObject x="250" y="320" width="300" height="100">
               <div className="w-full h-full flex items-center justify-center text-center px-4">
-                <div className="bg-brand-primary/95 backdrop-blur-xl text-white px-5 py-2.5 rounded-2xl text-sm font-heading font-bold shadow-2xl border border-white/30 animate-in slide-in-from-bottom-2 duration-500">
+                <div className="bg-brand-primary/95 backdrop-blur-xl text-white px-5 py-2.5 rounded-2xl text-sm font-heading font-bold shadow-2xl border border-white/30 animate-label-pop">
                   {label}
                 </div>
               </div>
