@@ -56,6 +56,7 @@ export interface GameState {
   currentImages: [ImageItem, ImageItem] | null;
   submissions: Submission[];
   moderatorTone: 'serious' | 'funny';
+  aiForfeited?: boolean;
   intersectionLabel?: string;
   aiModeratorVerdict?: AIModeratorVerdict;
 }

@@ -85,9 +85,6 @@ const App: React.FC = () => {
   const [collisionImage, setCollisionImage] = useState<string | null>(null);
   const [aiCommentary, setAiCommentary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // When the AI can't produce a submission, the early-finish check must not
-  // keep waiting for one — the human would be stuck until the timer expires.
-  const [aiForfeited, setAiForfeited] = useState(false);
   const processingRef = useRef(false);
   const startingRoundRef = useRef(false);
 
@@ -103,7 +100,7 @@ const App: React.FC = () => {
 
   // End the round when the clock runs out or everyone has submitted.
   useEffect(() => {
-    const { phase, timer, submissions, players, currentImages, moderatorTone } = gameState;
+    const { phase, timer, submissions, players, currentImages, moderatorTone, aiForfeited } = gameState;
     if (phase !== 'ROUND' || !currentImages) return;
 
     const allSubmitted =
@@ -180,7 +177,7 @@ const App: React.FC = () => {
     };
 
     void processRoundResults();
-  }, [gameState, aiForfeited]);
+  }, [gameState]);
 
   const handleProfileConfirm = () => {
     const name = inputName.trim();
@@ -214,7 +211,6 @@ const App: React.FC = () => {
     setAiCommentary(null);
     setSubmissionText('');
     setError(null);
-    setAiForfeited(false);
 
     const shuffled = [...INITIAL_IMAGE_DECK].sort(() => 0.5 - Math.random());
     const pair: [ImageItem, ImageItem] = [shuffled[0], shuffled[1]];
@@ -227,14 +223,17 @@ const App: React.FC = () => {
       submissions: [],
       intersectionLabel: undefined,
       aiModeratorVerdict: undefined,
+      aiForfeited: false,
     }));
 
+    // Both updates below check `prev.currentImages === pair` so a stale
+    // response from an earlier round can never leak into a later one.
     try {
       const aiText = await generateAISubmission(pair[0], pair[1]);
-      // Append (never replace) and only if the round is still running —
+      // Append (never replace) and only while this round is still running —
       // a fast human submission must not be lost to this async response.
       setGameState(prev =>
-        prev.phase === 'ROUND'
+        prev.phase === 'ROUND' && prev.currentImages === pair
           ? { ...prev, submissions: [...prev.submissions, { playerId: AI_PLAYER.id, content: aiText, timestamp: Date.now() }] }
           : prev
       );
@@ -243,7 +242,11 @@ const App: React.FC = () => {
       setError('Circuit is offline this round — it forfeits its turn.');
       // Don't add a placeholder submission: the moderator would score it.
       // The early-finish check skips the AI when this flag is set.
-      setAiForfeited(true);
+      setGameState(prev =>
+        prev.phase === 'ROUND' && prev.currentImages === pair
+          ? { ...prev, aiForfeited: true }
+          : prev
+      );
     } finally {
       startingRoundRef.current = false;
     }

@@ -3,19 +3,26 @@ import { ImageItem, Submission, AIModeratorVerdict } from './types';
 // All Gemini calls go through the /api proxy (see server/genai.mjs) so the
 // API key never ships in the client bundle.
 async function callApi<T>(route: string, body: unknown): Promise<T> {
-  const response = await fetch(`/api/${route}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    // fetch has no built-in timeout; a stalled request must not hang the
-    // game loop (or the startRound in-flight guard) forever.
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) {
-    const data = await response.json().catch(() => null);
-    throw new Error(data?.error || `Request to /api/${route} failed (${response.status})`);
+  // fetch has no built-in timeout; a stalled request must not hang the game
+  // loop forever. AbortController + setTimeout instead of AbortSignal.timeout
+  // for older mobile Safari support.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const response = await fetch(`/api/${route}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error || `Request to /api/${route} failed (${response.status})`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
   }
-  return response.json();
 }
 
 // Browsers block audio that isn't tied to a user gesture, so the context is
