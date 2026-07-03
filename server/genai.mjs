@@ -6,19 +6,38 @@ const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let data = '';
+    // Collect raw buffers and decode once at the end — per-chunk string
+    // concatenation corrupts multi-byte UTF-8 sequences split across chunks.
+    const chunks = [];
+    let total = 0;
+    let settled = false;
+
     req.on('data', (chunk) => {
-      data += chunk;
-      if (data.length > 1_000_000) reject(new Error('Request body too large'));
+      if (settled) return;
+      total += chunk.length;
+      if (total > 1_000_000) {
+        settled = true;
+        req.destroy();
+        reject(new Error('Request body too large'));
+        return;
+      }
+      chunks.push(chunk);
     });
     req.on('end', () => {
+      if (settled) return;
+      settled = true;
       try {
-        resolve(data ? JSON.parse(data) : {});
+        const raw = Buffer.concat(chunks).toString('utf8');
+        resolve(raw ? JSON.parse(raw) : {});
       } catch {
         reject(new Error('Invalid JSON body'));
       }
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
   });
 }
 

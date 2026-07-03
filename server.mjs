@@ -28,17 +28,32 @@ const handleApi = createApiHandler(() => process.env.GEMINI_API_KEY);
 async function serveStatic(req, res) {
   const url = (req.url || '/').split('?')[0];
   const safePath = normalize(url).replace(/^(\.\.[/\\])+/, '');
-  let filePath = join(DIST, safePath === '/' ? 'index.html' : safePath);
+  const filePath = join(DIST, safePath === '/' ? 'index.html' : safePath);
 
   try {
-    let content = await readFile(filePath);
+    const content = await readFile(filePath);
     res.setHeader('Content-Type', MIME_TYPES[extname(filePath)] || 'application/octet-stream');
     res.end(content);
+    return;
   } catch {
-    // SPA fallback: unknown paths get the app shell.
+    // Missing assets must 404 — serving index.html to a script/css request
+    // causes a MIME mismatch that breaks the app with no useful signal.
+    const isNavigation = extname(safePath) === '' && (req.headers.accept || '').includes('text/html');
+    if (!isNavigation) {
+      res.statusCode = 404;
+      res.end('Not found');
+      return;
+    }
+  }
+
+  // SPA fallback: unknown navigation routes get the app shell.
+  try {
     const content = await readFile(join(DIST, 'index.html'));
     res.setHeader('Content-Type', 'text/html');
     res.end(content);
+  } catch {
+    res.statusCode = 500;
+    res.end('dist/index.html not found — run `npm run build` first');
   }
 }
 

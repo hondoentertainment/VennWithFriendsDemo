@@ -83,6 +83,7 @@ const App: React.FC = () => {
   const [aiCommentary, setAiCommentary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const processingRef = useRef(false);
+  const startingRoundRef = useRef(false);
 
   // Countdown while a round is live. Keyed on phase only so the interval
   // isn't torn down and recreated on every tick.
@@ -123,11 +124,23 @@ const App: React.FC = () => {
         const [commentary, labelData, rawVerdict] = await Promise.all([
           getLiveCommentary(img1, img2, submissions),
           generateIntersectionLabel(img1, img2, submissions),
-          moderateSoloRound(img1, img2, submissions, moderatorTone),
+          moderateSoloRound(img1, img2, submissions, moderatorTone).catch((err): null => {
+            console.error('Moderation failed', err);
+            return null;
+          }),
         ]);
 
         setAiCommentary(commentary);
-        const verdict = sanitizeVerdict(rawVerdict, submissions);
+
+        // A moderation outage shouldn't void the round: keep the label and
+        // commentary, award no points, and tell the player — but never
+        // fabricate a winner.
+        const verdict = rawVerdict
+          ? sanitizeVerdict(rawVerdict, submissions)
+          : { scores: {}, reasoning: 'The moderator glitched out mid-verdict — call it a draw!', winnerId: '' };
+        if (!rawVerdict) {
+          setError('The AI moderator hit a snag — no points were awarded this round.');
+        }
 
         const winner = submissions.find(s => s.playerId === verdict.winnerId);
         if (winner) {
@@ -148,7 +161,7 @@ const App: React.FC = () => {
         }));
 
         // Fire-and-forget: the results screen shouldn't wait on TTS.
-        void announceWinner(verdict.reasoning);
+        if (rawVerdict) void announceWinner(verdict.reasoning);
       } catch (err) {
         console.error('Game loop failure', err);
         setError('The AI moderator hit a snag — showing the round without a verdict.');
@@ -182,6 +195,11 @@ const App: React.FC = () => {
   };
 
   const startRound = async () => {
+    // Guard against double-clicks: a second call before React rerenders would
+    // pick a different image pair and append a duplicate AI submission.
+    if (startingRoundRef.current) return;
+    startingRoundRef.current = true;
+
     // Audio must be unlocked from a user gesture or the verdict announcement is muted.
     unlockAudio();
     setCollisionImage(null);
@@ -214,6 +232,8 @@ const App: React.FC = () => {
     } catch (err) {
       console.error('AI submission failed', err);
       setError('Circuit is offline this round — it forfeits its turn.');
+    } finally {
+      startingRoundRef.current = false;
     }
   };
 
