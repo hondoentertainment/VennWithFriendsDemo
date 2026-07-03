@@ -65,7 +65,10 @@ const App: React.FC = () => {
 
   const [gameState, setGameState] = useState<GameState>(() => ({
     phase: 'LOBBY',
-    players: [],
+    // A returning player skips the profile screen, so seed the roster from
+    // the stored profile (with fresh per-game counters) or scoring and the
+    // final standings would have nobody to update.
+    players: currentUser ? [{ ...currentUser, score: 0, roundsWon: 0 }, { ...AI_PLAYER }] : [],
     round: 1,
     maxRounds: 3,
     timer: 30,
@@ -82,6 +85,9 @@ const App: React.FC = () => {
   const [collisionImage, setCollisionImage] = useState<string | null>(null);
   const [aiCommentary, setAiCommentary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // When the AI can't produce a submission, the early-finish check must not
+  // keep waiting for one — the human would be stuck until the timer expires.
+  const [aiForfeited, setAiForfeited] = useState(false);
   const processingRef = useRef(false);
   const startingRoundRef = useRef(false);
 
@@ -100,7 +106,9 @@ const App: React.FC = () => {
     const { phase, timer, submissions, players, currentImages, moderatorTone } = gameState;
     if (phase !== 'ROUND' || !currentImages) return;
 
-    const allSubmitted = players.length > 0 && players.every(p => submissions.some(s => s.playerId === p.id));
+    const allSubmitted =
+      players.length > 0 &&
+      players.every(p => (p.isAI && aiForfeited) || submissions.some(s => s.playerId === p.id));
     if (timer !== 0 && !allSubmitted) return;
     if (processingRef.current) return;
     processingRef.current = true;
@@ -172,7 +180,7 @@ const App: React.FC = () => {
     };
 
     void processRoundResults();
-  }, [gameState]);
+  }, [gameState, aiForfeited]);
 
   const handleProfileConfirm = () => {
     const name = inputName.trim();
@@ -206,6 +214,7 @@ const App: React.FC = () => {
     setAiCommentary(null);
     setSubmissionText('');
     setError(null);
+    setAiForfeited(false);
 
     const shuffled = [...INITIAL_IMAGE_DECK].sort(() => 0.5 - Math.random());
     const pair: [ImageItem, ImageItem] = [shuffled[0], shuffled[1]];
@@ -232,6 +241,9 @@ const App: React.FC = () => {
     } catch (err) {
       console.error('AI submission failed', err);
       setError('Circuit is offline this round — it forfeits its turn.');
+      // Don't add a placeholder submission: the moderator would score it.
+      // The early-finish check skips the AI when this flag is set.
+      setAiForfeited(true);
     } finally {
       startingRoundRef.current = false;
     }
@@ -254,6 +266,9 @@ const App: React.FC = () => {
     }
     setCollisionImage(null);
     setAiCommentary(null);
+    // A stale in-flight guard from a stalled request must never block the
+    // next round; requests also time out (see callApi), this is a backstop.
+    startingRoundRef.current = false;
     setGameState(prev => ({
       ...prev,
       phase: 'LOBBY',
@@ -285,6 +300,7 @@ const App: React.FC = () => {
   const playAgain = () => {
     setCollisionImage(null);
     setAiCommentary(null);
+    startingRoundRef.current = false;
     setGameState(prev => ({
       ...prev,
       phase: 'LOBBY',

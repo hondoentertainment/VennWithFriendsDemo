@@ -7,6 +7,9 @@ async function callApi<T>(route: string, body: unknown): Promise<T> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    // fetch has no built-in timeout; a stalled request must not hang the
+    // game loop (or the startRound in-flight guard) forever.
+    signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) {
     const data = await response.json().catch(() => null);
