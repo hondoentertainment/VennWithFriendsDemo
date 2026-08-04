@@ -2,6 +2,9 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { createApiHandler } from './server/genai.mjs';
+import { guardConfigFromEnv } from './server/guard.mjs';
+import { createRoundStore } from './server/rounds.mjs';
+import { createShareHandler } from './server/share.mjs';
 
 try {
   process.loadEnvFile('.env.local');
@@ -24,6 +27,21 @@ const MIME_TYPES = {
 };
 
 const handleApi = createApiHandler(() => process.env.GEMINI_API_KEY);
+
+const roundStore = createRoundStore({
+  dir: process.env.ROUNDS_DIR || '.data/rounds',
+  ttlMs: Number(process.env.ROUNDS_TTL_MS) || undefined,
+  maxRounds: Number(process.env.ROUNDS_MAX) || undefined,
+});
+
+const handleShare = createShareHandler({
+  store: roundStore,
+  publicUrl: process.env.PUBLIC_URL,
+  config: guardConfigFromEnv(),
+  // Read per request rather than cached: the shell changes on every deploy,
+  // and this route is not hot enough for the read to matter.
+  getIndexHtml: () => readFile(join(DIST, 'index.html'), 'utf8').catch(() => null),
+});
 
 async function serveStatic(req, res) {
   const url = (req.url || '/').split('?')[0];
@@ -58,7 +76,12 @@ async function serveStatic(req, res) {
 }
 
 createServer((req, res) => {
-  if ((req.url || '').startsWith('/api/')) {
+  const path = (req.url || '').split('?')[0];
+  // Share routes claim /api/rounds* and /r/*; anything else under /api goes to
+  // the Gemini proxy, and the rest is static.
+  if (path.startsWith('/api/rounds') || path.startsWith('/r/')) {
+    handleShare(req, res, () => serveStatic(req, res));
+  } else if (path.startsWith('/api/')) {
     handleApi(req, res);
   } else {
     serveStatic(req, res);

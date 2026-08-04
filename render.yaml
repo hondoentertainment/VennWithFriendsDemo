@@ -1,0 +1,29 @@
+# Render blueprint. Deploy with: New > Blueprint, point at this repo, then set
+# GEMINI_API_KEY in the dashboard (it is deliberately not in this file).
+services:
+  - type: web
+    name: venn-with-friends
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false # set in the dashboard; never committed
+      - key: NODE_VERSION
+        value: "22"
+      # Render terminates TLS at its edge and forwards one hop, so per-IP rate
+      # limiting sees real client addresses instead of the load balancer.
+      - key: TRUST_PROXY_HOPS
+        value: "1"
+      # Absolute base for share links and Open Graph tags. Update if you attach
+      # a custom domain.
+      - key: PUBLIC_URL
+        value: https://venn-with-friends.onrender.com
+    # Shared rounds are files on disk; without this they vanish on every deploy
+    # and restart, breaking already-posted links.
+    disk:
+      name: rounds
+      mountPath: /app/.data
+      sizeGB: 1

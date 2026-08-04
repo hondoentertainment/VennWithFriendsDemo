@@ -38,6 +38,10 @@ included for hosts that build from one; hosts that build from source should
 use `npm ci && npm run build` with `npm start` as the start command. Set
 `GEMINI_API_KEY` as a runtime secret.
 
+[`render.yaml`](render.yaml) is a ready blueprint: point Render at the repo,
+set `GEMINI_API_KEY` in the dashboard, and it provisions the service with the
+persistent disk and proxy settings already correct.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -50,6 +54,30 @@ use `npm ci && npm run build` with `npm start` as the start command. Set
 | `RATE_LIMIT_WINDOW_MS` | `60000` | Refill window. |
 | `MAX_CONCURRENT_UPSTREAM` | `8` | Simultaneous Gemini calls before shedding load with a 503. |
 | `MAX_BODY_BYTES` | `256000` | Request body cap. |
+| `PUBLIC_URL` | _(request host)_ | Absolute base for share links and Open Graph tags. Set this in production. |
+| `ROUNDS_DIR` | `.data/rounds` | Where shared rounds are stored. |
+| `ROUNDS_TTL_MS` | 30 days | How long a shared round stays reachable. |
+| `ROUNDS_MAX` | `5000` | Cap on stored rounds; oldest are dropped first. |
+
+### Shared rounds
+
+The results screen can mint a permalink (`/r/:id`) for a finished round. The
+page is served with its own Open Graph tags and the AI-generated fusion image,
+so a posted link unfurls with the picture the model made from the winning
+answer rather than a bare text card.
+
+Rounds are one JSON file and one PNG per round under `ROUNDS_DIR` — no
+database, so the app stays a single process. Two consequences worth knowing:
+
+- **The disk must be persistent.** On a host with an ephemeral filesystem,
+  every deploy breaks already-posted links. `render.yaml` mounts a disk for
+  exactly this reason.
+- **Rounds expire** after `ROUNDS_TTL_MS` (30 days by default). They contain
+  player-chosen names and free text, so keeping them forever isn't a default
+  anyone chose deliberately. Raise it if you want durable links.
+
+Ids are unguessable and there is no listing endpoint, so a round is reachable
+only by its link — but anyone with that link can read it. Treat it as public.
 
 ### Abuse controls
 

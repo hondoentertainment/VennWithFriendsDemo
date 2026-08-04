@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { GameState, ImageItem, UserProfile, Player } from './types';
+import { GameState, ImageItem, UserProfile, Player, SharedRound } from './types';
 import { AVATARS, GRADIENTS, INITIAL_IMAGE_DECK } from './constants';
 import { appendHistory, applyVerdict, buildGameRecord, sanitizeVerdict, sortStandings } from './game/scoring';
+import { pickPair } from './game/pairing';
 import AvatarDisplay from './components/AvatarDisplay';
 import VennDiagram from './components/VennDiagram';
 import Timer from './components/Timer';
 import Logo from './components/Logo';
+import SharedRoundView from './components/SharedRound';
 import {
   generateIntersectionLabel,
   generateAISubmission,
@@ -14,9 +16,17 @@ import {
   getLiveCommentary,
   announceWinner,
   unlockAudio,
+  shareRound,
+  fetchSharedRound,
 } from './geminiService';
 
 const PROFILE_STORAGE_KEY = 'venn_user_v1';
+
+/** `/r/:id` renders a shared round instead of the game. */
+function sharedRoundId(): string | null {
+  const match = /^\/r\/([a-z2-9]{6,32})\/?$/.exec(window.location.pathname);
+  return match ? match[1] : null;
+}
 
 const AI_PLAYER: Player = {
   id: 'ai-guest',
@@ -71,8 +81,23 @@ const App: React.FC = () => {
   const [collisionImage, setCollisionImage] = useState<string | null>(null);
   const [aiCommentary, setAiCommentary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
   const processingRef = useRef(false);
   const startingRoundRef = useRef(false);
+  // Images from the previous round, so the next pair avoids repeating them.
+  const recentImagesRef = useRef<string[]>([]);
+
+  const [viewingRoundId] = useState(sharedRoundId);
+  const [sharedRound, setSharedRound] = useState<SharedRound | null>(null);
+  const [sharedError, setSharedError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!viewingRoundId) return;
+    fetchSharedRound(viewingRoundId)
+      .then(setSharedRound)
+      .catch((err: Error) => setSharedError(err.message));
+  }, [viewingRoundId]);
 
   // Countdown while a round is live. Keyed on phase only so the interval
   // isn't torn down and recreated on every tick.
@@ -193,9 +218,12 @@ const App: React.FC = () => {
     setAiCommentary(null);
     setSubmissionText('');
     setError(null);
+    setShareUrl(null);
 
-    const shuffled = [...INITIAL_IMAGE_DECK].sort(() => 0.5 - Math.random());
-    const pair: [ImageItem, ImageItem] = [shuffled[0], shuffled[1]];
+    // Pairs are drawn by lowest tag overlap, so the two images are far enough
+    // apart to be worth bridging.
+    const pair: [ImageItem, ImageItem] = pickPair(INITIAL_IMAGE_DECK, { exclude: recentImagesRef.current });
+    recentImagesRef.current = [pair[0].id, pair[1].id];
 
     setGameState(prev => ({
       ...prev,
@@ -292,6 +320,47 @@ const App: React.FC = () => {
 
   const playerById = (id: string) => gameState.players.find(p => p.id === id);
 
+  const handleShare = async () => {
+    const verdict = gameState.aiModeratorVerdict;
+    if (!gameState.currentImages || !verdict || sharing) return;
+    setSharing(true);
+    try {
+      const [img1, img2] = gameState.currentImages;
+      const url = await shareRound({
+        imageA: { title: img1.title, url: img1.url, mediaType: img1.mediaType },
+        imageB: { title: img2.title, url: img2.url, mediaType: img2.mediaType },
+        label: gameState.intersectionLabel || '',
+        reasoning: verdict.reasoning,
+        submissions: gameState.submissions.map(sub => {
+          const player = playerById(sub.playerId);
+          return {
+            name: player?.name ?? 'Unknown',
+            avatar: player?.avatar ?? '🙂',
+            color: player?.color ?? GRADIENTS[0].value,
+            content: sub.content,
+            score: verdict.scores[sub.playerId] ?? 0,
+            isWinner: verdict.winnerId === sub.playerId,
+          };
+        }),
+        image: collisionImage,
+      });
+      setShareUrl(url);
+
+      // The native sheet is the better experience where it exists; the
+      // clipboard is the fallback. A cancelled share is not an error.
+      if (navigator.share) {
+        await navigator.share({ title: 'Venn with Friends', url }).catch(() => {});
+      } else {
+        await navigator.clipboard?.writeText(url).catch(() => {});
+      }
+    } catch (err) {
+      console.error('Share failed', err);
+      setError("Couldn't create a share link — try again in a moment.");
+    } finally {
+      setSharing(false);
+    }
+  };
+
   const errorBanner = error && (
     <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-brand-coral text-white px-6 py-3 rounded-2xl shadow-xl flex items-center gap-4">
       <span className="font-bold text-sm">{error}</span>
@@ -300,6 +369,27 @@ const App: React.FC = () => {
   );
 
   const renderScreen = () => {
+    // A /r/:id visitor sees the shared round, not the game — including when
+    // they have a stored profile from playing before.
+    if (viewingRoundId) {
+      if (sharedRound) return <SharedRoundView round={sharedRound} />;
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center gap-6 p-8 bg-brand-cream text-center">
+          <Logo size="sm" />
+          {sharedError ? (
+            <>
+              <p className="text-xl font-bold text-brand-dark/70">{sharedError}</p>
+              <a href="/" className="px-10 py-4 bg-brand-primary text-white rounded-full font-bold shadow-xl">
+                Play Venn with Friends
+              </a>
+            </>
+          ) : (
+            <div className="w-16 h-16 border-8 border-brand-primary border-t-transparent rounded-full animate-spin" />
+          )}
+        </div>
+      );
+    }
+
     if (!currentUser) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-brand-cream">
@@ -432,9 +522,30 @@ const App: React.FC = () => {
                     );
                   })}
               </div>
-              <button onClick={continueGame} className="w-full py-5 bg-brand-dark text-white rounded-2xl font-bold text-xl">
-                {gameState.round >= gameState.maxRounds ? 'See Final Results' : 'Next Round'}
-              </button>
+              <div className="space-y-3">
+                <button onClick={continueGame} className="w-full py-5 bg-brand-dark text-white rounded-2xl font-bold text-xl">
+                  {gameState.round >= gameState.maxRounds ? 'See Final Results' : 'Next Round'}
+                </button>
+                {verdict && gameState.submissions.length > 0 && (
+                  <button
+                    onClick={handleShare}
+                    disabled={sharing}
+                    className="w-full py-4 bg-brand-cream border-2 border-brand-dark/10 rounded-2xl font-bold disabled:opacity-50"
+                  >
+                    {sharing ? 'Creating link…' : shareUrl ? '🔗 Link copied — share again' : '🔗 Share this round'}
+                  </button>
+                )}
+                {shareUrl && (
+                  <a
+                    href={shareUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block text-center text-sm text-brand-dark/50 underline break-all"
+                  >
+                    {shareUrl}
+                  </a>
+                )}
+              </div>
             </div>
           </div>
         </div>
