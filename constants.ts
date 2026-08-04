@@ -111,19 +111,12 @@ export const INITIAL_IMAGE_DECK: ImageItem[] = [
     tags: ['nature', 'green', 'peace', 'landscape'], 
     mediaType: 'image' 
   },
-  { 
-    id: 'h7', 
-    url: 'https://images.unsplash.com/photo-1504333638930-c8787321eee0?auto=format&fit=crop&w=1200&q=80', 
-    title: 'Ancient Sands', 
-    description: 'Timeless patterns carved into desert dunes.', 
-    tags: ['nature', 'travel', 'mystery', 'desert'], 
-    mediaType: 'image' 
+  {
+    id: 'h7',
+    url: 'https://images.unsplash.com/photo-1504333638930-c8787321eee0?auto=format&fit=crop&w=1200&q=80',
+    title: 'Ancient Sands',
+    description: 'Timeless patterns carved into desert dunes.',
+    tags: ['nature', 'travel', 'mystery', 'desert'],
+    mediaType: 'image'
   }
-];
-
-export const PRESET_COLLECTIONS = [
-  { id: 'cinematic', name: 'Cinematic Deck', icon: '🎬', topics: ['nature', 'technology', 'glow', 'mountain'] },
-  { id: 'urban', name: 'Urban Life', icon: '🏙️', topics: ['city', 'architecture', 'night', 'urban'] },
-  { id: 'elemental', name: 'The Elements', icon: '🔥', topics: ['fire', 'water', 'winter', 'desert'] },
-  { id: 'cosmic', name: 'Deep Space', icon: '🚀', topics: ['space', 'abstract', 'mystery', 'technology'] },
 ];

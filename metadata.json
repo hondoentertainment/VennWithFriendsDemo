@@ -1,7 +1,5 @@
 {
   "name": "Venn with Friends",
-  "description": "A fast-paced multiplayer party game where players find the creative intersection between two random images.",
-  "requestFramePermissions": [
-    "camera"
-  ]
+  "description": "A fast-paced party game where you battle an AI opponent to find the creative intersection between two random images.",
+  "requestFramePermissions": []
 }

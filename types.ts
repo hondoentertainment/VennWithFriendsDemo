@@ -1,4 +1,4 @@
-export type GamePhase = 'LOBBY' | 'SETUP' | 'MATCH_CONFIG' | 'OPPONENT_SELECT' | 'ROUND' | 'REVEAL' | 'JUDGING' | 'RESULTS' | 'FINAL_RESULTS' | 'ROUND_TRANSITION';
+export type GamePhase = 'LOBBY' | 'ROUND' | 'REVEAL' | 'RESULTS' | 'FINAL_RESULTS';
 
 export interface Player {
   id: string;
@@ -10,18 +10,15 @@ export interface Player {
   score: number;
   isAI: boolean;
   roundsWon: number;
-  fastestCount: number;
 }
 
 export interface GameRecord {
   date: number;
-  roomCode: string;
   finalRank: number;
   totalPlayers: number;
   score: number;
   maxRounds: number;
   roundsWon: number;
-  fastestCount: number;
 }
 
 export interface UserProfile extends Player {
@@ -40,13 +37,7 @@ export interface ImageItem {
 export interface Submission {
   playerId: string;
   content: string;
-  type: 'text' | 'gif' | 'image' | 'video';
   timestamp: number;
-}
-
-export interface Vote {
-  voterId: string;
-  targetSubmissionId: string; // playerId of the submission
 }
 
 export interface AIModeratorVerdict {
@@ -56,7 +47,6 @@ export interface AIModeratorVerdict {
 }
 
 export interface GameState {
-  roomCode: string;
   phase: GamePhase;
   players: Player[];
   round: number;
@@ -65,15 +55,9 @@ export interface GameState {
   maxTimer: number;
   currentImages: [ImageItem, ImageItem] | null;
   submissions: Submission[];
-  votes: Vote[];
-  scoringMode: 'competitive' | 'casual';
-  moderatorType: 'ai' | 'human';
   moderatorTone: 'serious' | 'funny';
-  currentModeratorId?: string;
-  selectedTopics: string[];
-  aiLevel: number; // 0 to 1
+  aiForfeited?: boolean;
   intersectionLabel?: string;
-  clusters?: Record<string, string[]>;
   aiModeratorVerdict?: AIModeratorVerdict;
 }
 
