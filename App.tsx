@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { GameState, ImageItem, Submission, AIModeratorVerdict, UserProfile, Player, GameRecord } from './types';
+import { GameState, ImageItem, UserProfile, Player } from './types';
 import { AVATARS, GRADIENTS, INITIAL_IMAGE_DECK } from './constants';
+import { appendHistory, applyVerdict, buildGameRecord, sanitizeVerdict, sortStandings } from './game/scoring';
 import AvatarDisplay from './components/AvatarDisplay';
 import VennDiagram from './components/VennDiagram';
 import Timer from './components/Timer';
@@ -43,21 +44,6 @@ function loadStoredProfile(): UserProfile | null {
   } catch {
     return null;
   }
-}
-
-// Clamp scores to 0-10 and make sure the model-chosen winner actually submitted;
-// otherwise fall back to the highest-scored real submission.
-function sanitizeVerdict(verdict: AIModeratorVerdict, submissions: Submission[]): AIModeratorVerdict {
-  const validIds = submissions.map(s => s.playerId);
-  const scores: Record<string, number> = {};
-  for (const id of validIds) {
-    scores[id] = Math.max(0, Math.min(10, verdict.scores[id] ?? 0));
-  }
-  let winnerId = verdict.winnerId;
-  if (!validIds.includes(winnerId)) {
-    winnerId = validIds.reduce((best, id) => (scores[id] > scores[best] ? id : best), validIds[0]);
-  }
-  return { scores, winnerId, reasoning: verdict.reasoning };
 }
 
 const App: React.FC = () => {
@@ -157,11 +143,7 @@ const App: React.FC = () => {
           ...prev,
           intersectionLabel: labelData.intersectionLabel,
           aiModeratorVerdict: verdict,
-          players: prev.players.map(p => ({
-            ...p,
-            score: p.score + (verdict.scores[p.id] ?? 0),
-            roundsWon: p.roundsWon + (p.id === verdict.winnerId ? 1 : 0),
-          })),
+          players: applyVerdict(prev.players, verdict),
           phase: 'RESULTS',
         }));
 
@@ -284,16 +266,8 @@ const App: React.FC = () => {
   const finishGame = () => {
     const me = gameState.players.find(p => !p.isAI);
     if (me && currentUser) {
-      const standings = [...gameState.players].sort((a, b) => b.score - a.score);
-      const record: GameRecord = {
-        date: Date.now(),
-        finalRank: standings.findIndex(p => p.id === me.id) + 1,
-        totalPlayers: gameState.players.length,
-        score: me.score,
-        maxRounds: gameState.maxRounds,
-        roundsWon: me.roundsWon,
-      };
-      const updated = { ...currentUser, history: [...currentUser.history, record] };
+      const record = buildGameRecord(gameState.players, me, gameState.maxRounds, Date.now());
+      const updated = appendHistory(currentUser, record);
       setCurrentUser(updated);
       localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(updated));
     }
@@ -468,7 +442,7 @@ const App: React.FC = () => {
     }
 
     if (gameState.phase === 'FINAL_RESULTS') {
-      const standings = [...gameState.players].sort((a, b) => b.score - a.score);
+      const standings = sortStandings(gameState.players);
       const champion = standings[0];
       return (
         <div className="min-h-screen p-8 bg-brand-dark text-white flex flex-col items-center justify-center">

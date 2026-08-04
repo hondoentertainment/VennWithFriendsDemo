@@ -1,10 +1,20 @@
 import { GoogleGenAI, Type, Modality } from '@google/genai';
+import {
+  HttpError,
+  ROUTE_COSTS,
+  clientIp,
+  createConcurrencyGate,
+  createRateLimiter,
+  guardConfigFromEnv,
+  isOriginAllowed,
+} from './guard.mjs';
+import { validateBody } from './validate.mjs';
 
 const TEXT_MODEL = 'gemini-3-flash-preview';
 const IMAGE_MODEL = 'gemini-2.5-flash-image';
 const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 
-function readBody(req) {
+function readBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
     // Collect raw buffers and decode once at the end — per-chunk string
     // concatenation corrupts multi-byte UTF-8 sequences split across chunks.
@@ -15,10 +25,10 @@ function readBody(req) {
     req.on('data', (chunk) => {
       if (settled) return;
       total += chunk.length;
-      if (total > 1_000_000) {
+      if (total > maxBytes) {
         settled = true;
         req.destroy();
-        reject(new Error('Request body too large'));
+        reject(new HttpError(413, 'Request body too large'));
         return;
       }
       chunks.push(chunk);
@@ -30,7 +40,7 @@ function readBody(req) {
         const raw = Buffer.concat(chunks).toString('utf8');
         resolve(raw ? JSON.parse(raw) : {});
       } catch {
-        reject(new Error('Invalid JSON body'));
+        reject(new HttpError(400, 'Invalid JSON body'));
       }
     });
     req.on('error', (err) => {
@@ -166,8 +176,15 @@ const ROUTES = {
 /**
  * Connect-style middleware handling the game's /api/* routes.
  * The Gemini API key stays on the server; the client only ever sees game data.
+ *
+ * Every request passes the same gauntlet before any billable call is made:
+ * origin check → rate limit → body size → payload validation → concurrency
+ * gate. See guard.mjs for what each control does and does not protect against.
  */
-export function createApiHandler(getApiKey) {
+export function createApiHandler(getApiKey, options = {}) {
+  const config = { ...guardConfigFromEnv(), ...options };
+  const limiter = options.limiter ?? createRateLimiter({ capacity: config.capacity, windowMs: config.windowMs });
+  const gate = options.gate ?? createConcurrencyGate(config.maxConcurrent);
   let ai = null;
 
   return async (req, res, next) => {
@@ -177,8 +194,34 @@ export function createApiHandler(getApiKey) {
       if (next) return next();
       return sendJson(res, 404, { error: 'Not found' });
     }
+
+    if (!isOriginAllowed(req, config.allowedOrigins)) {
+      return sendJson(res, 403, { error: 'Origin not allowed' });
+    }
+
+    // An allowlisted cross-origin caller still needs the response headers, and
+    // its preflight must be answered before the POST is ever sent.
+    const origin = req.headers.origin;
+    if (origin && config.allowedOrigins.includes(origin.replace(/\/$/, ''))) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    }
+    if (req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.setHeader('Access-Control-Max-Age', '600');
+      res.statusCode = 204;
+      return res.end();
+    }
+
     if (req.method !== 'POST') {
       return sendJson(res, 405, { error: 'Method not allowed' });
+    }
+
+    const verdict = limiter.take(clientIp(req, config.trustedHops), ROUTE_COSTS[url] ?? 1);
+    if (!verdict.ok) {
+      res.setHeader('Retry-After', String(verdict.retryAfterSeconds));
+      return sendJson(res, 429, { error: 'Rate limit exceeded — slow down' });
     }
 
     const apiKey = getApiKey();
@@ -188,12 +231,17 @@ export function createApiHandler(getApiKey) {
 
     try {
       ai ??= new GoogleGenAI({ apiKey });
-      const body = await readBody(req);
-      const result = await route(ai, body);
+      const body = validateBody(url, await readBody(req, config.maxBodyBytes));
+      const result = await gate.run(() => route(ai, body));
       sendJson(res, 200, result);
     } catch (error) {
-      console.error(`API error on ${url}:`, error);
-      sendJson(res, 502, { error: error instanceof Error ? error.message : 'Upstream error' });
+      // Client mistakes (400/413) and load shedding (503) are expected traffic,
+      // not incidents — only genuine upstream failures are worth a log line.
+      const status = error instanceof HttpError ? error.status : 502;
+      if (status >= 500 && status !== 503) console.error(`API error on ${url}:`, error);
+      sendJson(res, status, {
+        error: error instanceof HttpError ? error.message : 'Upstream error',
+      });
     }
   };
 }
