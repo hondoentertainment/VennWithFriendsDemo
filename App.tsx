@@ -8,6 +8,7 @@ import VennDiagram from './components/VennDiagram';
 import Timer from './components/Timer';
 import Logo from './components/Logo';
 import SharedRoundView from './components/SharedRound';
+import PlayerStats from './components/PlayerStats';
 import {
   generateIntersectionLabel,
   generateAISubmission,
@@ -21,6 +22,9 @@ import {
 } from './geminiService';
 
 const PROFILE_STORAGE_KEY = 'venn_user_v1';
+
+const ROUND_OPTIONS = [3, 5, 10];
+const TIMER_OPTIONS = [15, 30, 60];
 
 /** `/r/:id` renders a shared round instead of the game. */
 function sharedRoundId(): string | null {
@@ -430,10 +434,28 @@ const App: React.FC = () => {
     }
 
     if (gameState.phase === 'LOBBY') {
+      // Settings only make sense before the first round — changing the game
+      // length or the moderator's tone midway would rewrite the rules of a
+      // game already in progress.
+      const canConfigure = gameState.round === 1;
+
+      const optionButton = (active: boolean, onClick: () => void, label: string, key: string | number) => (
+        <button
+          key={key}
+          onClick={onClick}
+          aria-pressed={active}
+          className={`px-4 py-2 rounded-xl font-bold text-sm transition-colors ${
+            active ? 'bg-brand-primary text-white shadow' : 'bg-brand-cream text-brand-dark/50 hover:text-brand-dark'
+          }`}
+        >
+          {label}
+        </button>
+      );
+
       return (
         <div className="min-h-screen p-8 bg-brand-cream flex flex-col items-center">
-          <Logo size="sm" className="mb-12" />
-          <div className="w-full max-w-4xl flex-1 flex flex-col items-center gap-10 text-center">
+          <Logo size="sm" className="mb-10" />
+          <div className="w-full max-w-4xl flex-1 flex flex-col items-center gap-8 text-center">
             <h1 className="text-5xl font-heading font-bold">Round {gameState.round} of {gameState.maxRounds}</h1>
             <div className="flex flex-wrap justify-center gap-4">
               {gameState.players.map(p => (
@@ -444,9 +466,57 @@ const App: React.FC = () => {
                 </div>
               ))}
             </div>
+
+            {canConfigure && (
+              <div className="w-full bg-white rounded-[2rem] shadow-lg p-6 space-y-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="font-bold text-sm text-brand-dark/60">Rounds</span>
+                  <div className="flex gap-2">
+                    {ROUND_OPTIONS.map(n =>
+                      optionButton(gameState.maxRounds === n, () => setGameState(prev => ({ ...prev, maxRounds: n })), String(n), n)
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="font-bold text-sm text-brand-dark/60">Seconds per round</span>
+                  <div className="flex gap-2">
+                    {TIMER_OPTIONS.map(n =>
+                      optionButton(
+                        gameState.maxTimer === n,
+                        () => setGameState(prev => ({ ...prev, maxTimer: n, timer: n })),
+                        String(n),
+                        n
+                      )
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="font-bold text-sm text-brand-dark/60">Moderator</span>
+                  <div className="flex gap-2">
+                    {optionButton(
+                      gameState.moderatorTone === 'funny',
+                      () => setGameState(prev => ({ ...prev, moderatorTone: 'funny' })),
+                      '😂 Funny',
+                      'funny'
+                    )}
+                    {optionButton(
+                      gameState.moderatorTone === 'serious',
+                      () => setGameState(prev => ({ ...prev, moderatorTone: 'serious' })),
+                      '🧐 Serious',
+                      'serious'
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             <button onClick={startRound} className="px-12 py-4 bg-brand-primary text-white rounded-full font-bold shadow-xl text-xl">
               Start Battle
             </button>
+
+            {canConfigure && <PlayerStats history={currentUser.history} />}
           </div>
         </div>
       );
