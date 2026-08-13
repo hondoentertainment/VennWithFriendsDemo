@@ -1,4 +1,4 @@
-import { ImageItem, Submission, AIModeratorVerdict } from './types';
+import { ImageItem, Submission, AIModeratorVerdict, SharedRound, SharePayload } from './types';
 
 // All Gemini calls go through the /api proxy (see server/genai.mjs) so the
 // API key never ships in the client bundle.
@@ -112,4 +112,21 @@ export async function moderateSoloRound(
 export async function generateAISubmission(imageA: ImageItem, imageB: ImageItem): Promise<string> {
   const { text } = await callApi<{ text: string }>('submission', { imageA, imageB });
   return text;
+}
+
+/**
+ * Persists a finished round and returns its permalink. The generated fusion
+ * image goes with it — that image is what makes the shared link worth posting.
+ */
+export async function shareRound(payload: SharePayload): Promise<string> {
+  const { url } = await callApi<{ id: string; url: string }>('rounds', payload);
+  return url;
+}
+
+export async function fetchSharedRound(id: string): Promise<SharedRound> {
+  // Not callApi: this is a GET, and a missing round is an expected outcome
+  // rather than a failure to report.
+  const response = await fetch(`/api/rounds/${encodeURIComponent(id)}`);
+  if (!response.ok) throw new Error('This round has expired or never existed.');
+  return response.json();
 }

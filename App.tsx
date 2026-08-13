@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { GameState, ImageItem, Submission, AIModeratorVerdict, UserProfile, Player, GameRecord } from './types';
+import { GameState, ImageItem, UserProfile, Player, SharedRound } from './types';
 import { AVATARS, GRADIENTS, INITIAL_IMAGE_DECK } from './constants';
+import { appendHistory, applyVerdict, buildGameRecord, sanitizeVerdict, sortStandings } from './game/scoring';
+import { pickPair } from './game/pairing';
 import AvatarDisplay from './components/AvatarDisplay';
 import VennDiagram from './components/VennDiagram';
 import Timer from './components/Timer';
 import Logo from './components/Logo';
+import SharedRoundView from './components/SharedRound';
+import PlayerStats from './components/PlayerStats';
 import {
   generateIntersectionLabel,
   generateAISubmission,
@@ -13,9 +17,20 @@ import {
   getLiveCommentary,
   announceWinner,
   unlockAudio,
+  shareRound,
+  fetchSharedRound,
 } from './geminiService';
 
 const PROFILE_STORAGE_KEY = 'venn_user_v1';
+
+const ROUND_OPTIONS = [3, 5, 10];
+const TIMER_OPTIONS = [15, 30, 60];
+
+/** `/r/:id` renders a shared round instead of the game. */
+function sharedRoundId(): string | null {
+  const match = /^\/r\/([a-z2-9]{6,32})\/?$/.exec(window.location.pathname);
+  return match ? match[1] : null;
+}
 
 const AI_PLAYER: Player = {
   id: 'ai-guest',
@@ -45,21 +60,6 @@ function loadStoredProfile(): UserProfile | null {
   }
 }
 
-// Clamp scores to 0-10 and make sure the model-chosen winner actually submitted;
-// otherwise fall back to the highest-scored real submission.
-function sanitizeVerdict(verdict: AIModeratorVerdict, submissions: Submission[]): AIModeratorVerdict {
-  const validIds = submissions.map(s => s.playerId);
-  const scores: Record<string, number> = {};
-  for (const id of validIds) {
-    scores[id] = Math.max(0, Math.min(10, verdict.scores[id] ?? 0));
-  }
-  let winnerId = verdict.winnerId;
-  if (!validIds.includes(winnerId)) {
-    winnerId = validIds.reduce((best, id) => (scores[id] > scores[best] ? id : best), validIds[0]);
-  }
-  return { scores, winnerId, reasoning: verdict.reasoning };
-}
-
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(loadStoredProfile);
 
@@ -85,8 +85,23 @@ const App: React.FC = () => {
   const [collisionImage, setCollisionImage] = useState<string | null>(null);
   const [aiCommentary, setAiCommentary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
   const processingRef = useRef(false);
   const startingRoundRef = useRef(false);
+  // Images from the previous round, so the next pair avoids repeating them.
+  const recentImagesRef = useRef<string[]>([]);
+
+  const [viewingRoundId] = useState(sharedRoundId);
+  const [sharedRound, setSharedRound] = useState<SharedRound | null>(null);
+  const [sharedError, setSharedError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!viewingRoundId) return;
+    fetchSharedRound(viewingRoundId)
+      .then(setSharedRound)
+      .catch((err: Error) => setSharedError(err.message));
+  }, [viewingRoundId]);
 
   // Countdown while a round is live. Keyed on phase only so the interval
   // isn't torn down and recreated on every tick.
@@ -157,11 +172,7 @@ const App: React.FC = () => {
           ...prev,
           intersectionLabel: labelData.intersectionLabel,
           aiModeratorVerdict: verdict,
-          players: prev.players.map(p => ({
-            ...p,
-            score: p.score + (verdict.scores[p.id] ?? 0),
-            roundsWon: p.roundsWon + (p.id === verdict.winnerId ? 1 : 0),
-          })),
+          players: applyVerdict(prev.players, verdict),
           phase: 'RESULTS',
         }));
 
@@ -211,9 +222,12 @@ const App: React.FC = () => {
     setAiCommentary(null);
     setSubmissionText('');
     setError(null);
+    setShareUrl(null);
 
-    const shuffled = [...INITIAL_IMAGE_DECK].sort(() => 0.5 - Math.random());
-    const pair: [ImageItem, ImageItem] = [shuffled[0], shuffled[1]];
+    // Pairs are drawn by lowest tag overlap, so the two images are far enough
+    // apart to be worth bridging.
+    const pair: [ImageItem, ImageItem] = pickPair(INITIAL_IMAGE_DECK, { exclude: recentImagesRef.current });
+    recentImagesRef.current = [pair[0].id, pair[1].id];
 
     setGameState(prev => ({
       ...prev,
@@ -284,16 +298,8 @@ const App: React.FC = () => {
   const finishGame = () => {
     const me = gameState.players.find(p => !p.isAI);
     if (me && currentUser) {
-      const standings = [...gameState.players].sort((a, b) => b.score - a.score);
-      const record: GameRecord = {
-        date: Date.now(),
-        finalRank: standings.findIndex(p => p.id === me.id) + 1,
-        totalPlayers: gameState.players.length,
-        score: me.score,
-        maxRounds: gameState.maxRounds,
-        roundsWon: me.roundsWon,
-      };
-      const updated = { ...currentUser, history: [...currentUser.history, record] };
+      const record = buildGameRecord(gameState.players, me, gameState.maxRounds, Date.now());
+      const updated = appendHistory(currentUser, record);
       setCurrentUser(updated);
       localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(updated));
     }
@@ -318,6 +324,47 @@ const App: React.FC = () => {
 
   const playerById = (id: string) => gameState.players.find(p => p.id === id);
 
+  const handleShare = async () => {
+    const verdict = gameState.aiModeratorVerdict;
+    if (!gameState.currentImages || !verdict || sharing) return;
+    setSharing(true);
+    try {
+      const [img1, img2] = gameState.currentImages;
+      const url = await shareRound({
+        imageA: { title: img1.title, url: img1.url, mediaType: img1.mediaType },
+        imageB: { title: img2.title, url: img2.url, mediaType: img2.mediaType },
+        label: gameState.intersectionLabel || '',
+        reasoning: verdict.reasoning,
+        submissions: gameState.submissions.map(sub => {
+          const player = playerById(sub.playerId);
+          return {
+            name: player?.name ?? 'Unknown',
+            avatar: player?.avatar ?? '🙂',
+            color: player?.color ?? GRADIENTS[0].value,
+            content: sub.content,
+            score: verdict.scores[sub.playerId] ?? 0,
+            isWinner: verdict.winnerId === sub.playerId,
+          };
+        }),
+        image: collisionImage,
+      });
+      setShareUrl(url);
+
+      // The native sheet is the better experience where it exists; the
+      // clipboard is the fallback. A cancelled share is not an error.
+      if (navigator.share) {
+        await navigator.share({ title: 'Venn with Friends', url }).catch(() => {});
+      } else {
+        await navigator.clipboard?.writeText(url).catch(() => {});
+      }
+    } catch (err) {
+      console.error('Share failed', err);
+      setError("Couldn't create a share link — try again in a moment.");
+    } finally {
+      setSharing(false);
+    }
+  };
+
   const errorBanner = error && (
     <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-brand-coral text-white px-6 py-3 rounded-2xl shadow-xl flex items-center gap-4">
       <span className="font-bold text-sm">{error}</span>
@@ -326,6 +373,27 @@ const App: React.FC = () => {
   );
 
   const renderScreen = () => {
+    // A /r/:id visitor sees the shared round, not the game — including when
+    // they have a stored profile from playing before.
+    if (viewingRoundId) {
+      if (sharedRound) return <SharedRoundView round={sharedRound} />;
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center gap-6 p-8 bg-brand-cream text-center">
+          <Logo size="sm" />
+          {sharedError ? (
+            <>
+              <p className="text-xl font-bold text-brand-dark/70">{sharedError}</p>
+              <a href="/" className="px-10 py-4 bg-brand-primary text-white rounded-full font-bold shadow-xl">
+                Play Venn with Friends
+              </a>
+            </>
+          ) : (
+            <div className="w-16 h-16 border-8 border-brand-primary border-t-transparent rounded-full animate-spin" />
+          )}
+        </div>
+      );
+    }
+
     if (!currentUser) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-brand-cream">
@@ -366,10 +434,28 @@ const App: React.FC = () => {
     }
 
     if (gameState.phase === 'LOBBY') {
+      // Settings only make sense before the first round — changing the game
+      // length or the moderator's tone midway would rewrite the rules of a
+      // game already in progress.
+      const canConfigure = gameState.round === 1;
+
+      const optionButton = (active: boolean, onClick: () => void, label: string, key: string | number) => (
+        <button
+          key={key}
+          onClick={onClick}
+          aria-pressed={active}
+          className={`px-4 py-2 rounded-xl font-bold text-sm transition-colors ${
+            active ? 'bg-brand-primary text-white shadow' : 'bg-brand-cream text-brand-dark/50 hover:text-brand-dark'
+          }`}
+        >
+          {label}
+        </button>
+      );
+
       return (
         <div className="min-h-screen p-8 bg-brand-cream flex flex-col items-center">
-          <Logo size="sm" className="mb-12" />
-          <div className="w-full max-w-4xl flex-1 flex flex-col items-center gap-10 text-center">
+          <Logo size="sm" className="mb-10" />
+          <div className="w-full max-w-4xl flex-1 flex flex-col items-center gap-8 text-center">
             <h1 className="text-5xl font-heading font-bold">Round {gameState.round} of {gameState.maxRounds}</h1>
             <div className="flex flex-wrap justify-center gap-4">
               {gameState.players.map(p => (
@@ -380,9 +466,57 @@ const App: React.FC = () => {
                 </div>
               ))}
             </div>
+
+            {canConfigure && (
+              <div className="w-full bg-white rounded-[2rem] shadow-lg p-6 space-y-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="font-bold text-sm text-brand-dark/60">Rounds</span>
+                  <div className="flex gap-2">
+                    {ROUND_OPTIONS.map(n =>
+                      optionButton(gameState.maxRounds === n, () => setGameState(prev => ({ ...prev, maxRounds: n })), String(n), n)
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="font-bold text-sm text-brand-dark/60">Seconds per round</span>
+                  <div className="flex gap-2">
+                    {TIMER_OPTIONS.map(n =>
+                      optionButton(
+                        gameState.maxTimer === n,
+                        () => setGameState(prev => ({ ...prev, maxTimer: n, timer: n })),
+                        String(n),
+                        n
+                      )
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="font-bold text-sm text-brand-dark/60">Moderator</span>
+                  <div className="flex gap-2">
+                    {optionButton(
+                      gameState.moderatorTone === 'funny',
+                      () => setGameState(prev => ({ ...prev, moderatorTone: 'funny' })),
+                      '😂 Funny',
+                      'funny'
+                    )}
+                    {optionButton(
+                      gameState.moderatorTone === 'serious',
+                      () => setGameState(prev => ({ ...prev, moderatorTone: 'serious' })),
+                      '🧐 Serious',
+                      'serious'
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             <button onClick={startRound} className="px-12 py-4 bg-brand-primary text-white rounded-full font-bold shadow-xl text-xl">
               Start Battle
             </button>
+
+            {canConfigure && <PlayerStats history={currentUser.history} />}
           </div>
         </div>
       );
@@ -458,9 +592,30 @@ const App: React.FC = () => {
                     );
                   })}
               </div>
-              <button onClick={continueGame} className="w-full py-5 bg-brand-dark text-white rounded-2xl font-bold text-xl">
-                {gameState.round >= gameState.maxRounds ? 'See Final Results' : 'Next Round'}
-              </button>
+              <div className="space-y-3">
+                <button onClick={continueGame} className="w-full py-5 bg-brand-dark text-white rounded-2xl font-bold text-xl">
+                  {gameState.round >= gameState.maxRounds ? 'See Final Results' : 'Next Round'}
+                </button>
+                {verdict && gameState.submissions.length > 0 && (
+                  <button
+                    onClick={handleShare}
+                    disabled={sharing}
+                    className="w-full py-4 bg-brand-cream border-2 border-brand-dark/10 rounded-2xl font-bold disabled:opacity-50"
+                  >
+                    {sharing ? 'Creating link…' : shareUrl ? '🔗 Link copied — share again' : '🔗 Share this round'}
+                  </button>
+                )}
+                {shareUrl && (
+                  <a
+                    href={shareUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block text-center text-sm text-brand-dark/50 underline break-all"
+                  >
+                    {shareUrl}
+                  </a>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -468,7 +623,7 @@ const App: React.FC = () => {
     }
 
     if (gameState.phase === 'FINAL_RESULTS') {
-      const standings = [...gameState.players].sort((a, b) => b.score - a.score);
+      const standings = sortStandings(gameState.players);
       const champion = standings[0];
       return (
         <div className="min-h-screen p-8 bg-brand-dark text-white flex flex-col items-center justify-center">

@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Shared-round storage (JSON + PNG per round)
+.data/

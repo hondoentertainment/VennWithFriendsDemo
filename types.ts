@@ -61,6 +61,32 @@ export interface GameState {
   aiModeratorVerdict?: AIModeratorVerdict;
 }
 
+/** One player's entry as it appears on a shared round page. */
+export interface SharedSubmission {
+  name: string;
+  avatar: string;
+  color: string;
+  content: string;
+  score: number;
+  isWinner: boolean;
+}
+
+export interface SharePayload {
+  imageA: Pick<ImageItem, 'title' | 'url' | 'mediaType'>;
+  imageB: Pick<ImageItem, 'title' | 'url' | 'mediaType'>;
+  label: string;
+  reasoning: string;
+  submissions: SharedSubmission[];
+  /** Base64 PNG data URL of the generated intersection, when one was produced. */
+  image: string | null;
+}
+
+export interface SharedRound extends Omit<SharePayload, 'image'> {
+  id: string;
+  createdAt: number;
+  hasImage: boolean;
+}
+
 export type AvatarOption = {
   emoji: string;
   label: string;
