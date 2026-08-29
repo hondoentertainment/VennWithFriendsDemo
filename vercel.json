@@ -4,11 +4,12 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/r/:path*", "destination": "/api/r/:path*" },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    { "source": "/api/:path+", "destination": "/api?__path=/api/:path+" },
+    { "source": "/r/:path+", "destination": "/api?__path=/r/:path+" },
+    { "source": "/((?!api(?:/|$)).*)", "destination": "/index.html" }
   ],
   "functions": {
-    "api/[...path].mjs": {
+    "api/index.mjs": {
       "maxDuration": 60,
       "includeFiles": "dist/index.html"
     }

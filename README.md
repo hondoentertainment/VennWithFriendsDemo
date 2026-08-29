@@ -51,9 +51,10 @@ small adapter instead:
 - [`vercel.json`](vercel.json) builds with `npm run build`, publishes `dist/`,
   rewrites client routes to the SPA, and sends `/api/*` and `/r/*` to a
   Node function.
-- [`api/[...path].mjs`](api/%5B...path%5D.mjs) wraps the existing
-  `createApiHandler` / `createShareHandler` — Gemini, guards, and validation
-  stay in `server/*.mjs`.
+- [`api/index.mjs`](api/index.mjs) wraps the existing `createApiHandler` /
+  `createShareHandler` — Gemini, guards, and validation stay in
+  `server/*.mjs`. `vercel.json` rewrites `/api/*` and `/r/*` onto that
+  function with the original path in `__path`.
 - Shared rounds go to [Vercel Blob](https://vercel.com/docs/vercel-blob)
   (`@vercel/blob`) when `VERCEL` is set. Set `ROUNDS_DIR` to keep the
   filesystem store (tests and `npm start` do this automatically).

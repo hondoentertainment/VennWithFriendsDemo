@@ -73,6 +73,7 @@ function memoryBlob(now = () => Date.now()) {
         .map(([pathname, entry]) => ({ pathname, uploadedAt: entry.uploadedAt }));
       return { blobs, hasMore: false };
     },
+    configured: () => true,
   };
 }
 
@@ -109,6 +110,17 @@ describe('createBlobRoundStore', () => {
     expect(await store.get(id)).not.toBeNull();
     t += 5000;
     expect(await store.get(id)).toBeNull();
+  });
+
+  it('refuses to save when Blob credentials are missing', async () => {
+    const store = createBlobRoundStore({
+      ...memoryBlob(),
+      configured: () => false,
+    });
+    await expect(store.save({ label: 'x' }, null)).rejects.toMatchObject({
+      status: 503,
+      message: expect.stringMatching(/Vercel Blob/),
+    });
   });
 
   it('prunes expired records and drops the oldest over the cap', async () => {

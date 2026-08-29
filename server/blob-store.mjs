@@ -11,7 +11,12 @@
 
 import { buffer } from 'node:stream/consumers';
 import { del as blobDel, get as blobGet, list as blobList, put as blobPut } from '@vercel/blob';
+import { HttpError } from './guard.mjs';
 import { generateId, isValidId } from './rounds.mjs';
+
+export function blobConfigured(env = process.env) {
+  return Boolean(env.BLOB_READ_WRITE_TOKEN || (env.BLOB_STORE_ID && env.VERCEL_OIDC_TOKEN));
+}
 
 const PREFIX = 'rounds/';
 const ACCESS = 'private';
@@ -24,6 +29,7 @@ export function createBlobRoundStore({
   get = blobGet,
   del = blobDel,
   list = blobList,
+  configured = blobConfigured,
 } = {}) {
   const jsonPath = (id) => `${PREFIX}${id}.json`;
   const imagePath = (id) => `${PREFIX}${id}.png`;
@@ -97,6 +103,12 @@ export function createBlobRoundStore({
 
   return {
     async save(record, imageBuffer) {
+      if (!configured()) {
+        throw new HttpError(
+          503,
+          'Shared rounds need Vercel Blob — connect a Blob store or set BLOB_READ_WRITE_TOKEN'
+        );
+      }
       const id = generateId();
       await put(jsonPath(id), JSON.stringify({ ...record, id, createdAt: now() }), {
         access: ACCESS,

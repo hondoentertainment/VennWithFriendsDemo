@@ -20,13 +20,25 @@ import { createShareHandler } from './share.mjs';
 import { createStoreFromEnv } from './store.mjs';
 
 /**
- * Catch-all functions receive `/api/:path*`. Share permalinks are rewritten
- * from `/r/:id` to `/api/r/:id` so they land here; restore the public path
- * before the share handler sees the request.
+ * vercel.json rewrites `/api/:path+` and `/r/:path+` onto `/api` (this
+ * function) and stashes the public path in `__path`. Vite on Vercel does not
+ * treat `api/[...path].mjs` as a multi-segment catch-all, so the query is
+ * how the original route survives.
  *
- * Some Node runtimes also strip the `/api` prefix on catch-alls. Put it back
- * so ROUTES in genai.mjs still match.
+ * Some Node runtimes also strip the `/api` prefix. Put it back so ROUTES
+ * in genai.mjs still match.
  */
+export function queryParam(req, name) {
+  const fromHelpers = req.query?.[name];
+  if (Array.isArray(fromHelpers)) return fromHelpers[0] || '';
+  if (typeof fromHelpers === 'string' && fromHelpers) return fromHelpers;
+
+  const url = req.url || '';
+  const idx = url.indexOf('?');
+  if (idx === -1) return '';
+  return new URLSearchParams(url.slice(idx + 1)).get(name) || '';
+}
+
 export function normalizeFunctionUrl(url) {
   const [path, query] = String(url || '/').split('?');
   let next = path || '/';
@@ -38,6 +50,12 @@ export function normalizeFunctionUrl(url) {
   }
 
   return query ? `${next}?${query}` : next;
+}
+
+export function originalPath(req) {
+  const rewritten = queryParam(req, '__path');
+  if (rewritten) return rewritten;
+  return normalizeFunctionUrl(req.url || '/');
 }
 
 function canUseRawStream(req) {
@@ -57,7 +75,7 @@ function bodyChunks(req) {
 }
 
 export function adaptRequest(req) {
-  const url = normalizeFunctionUrl(req.url || '/');
+  const url = originalPath(req);
   if (canUseRawStream(req)) {
     req.url = url;
     return req;

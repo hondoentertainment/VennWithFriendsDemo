@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createRoundStore } from './rounds.mjs';
 import { createShareHandler } from './share.mjs';
-import { adaptRequest, createVercelHandler, normalizeFunctionUrl } from './vercel-handler.mjs';
+import { adaptRequest, createVercelHandler, normalizeFunctionUrl, originalPath } from './vercel-handler.mjs';
 
 describe('normalizeFunctionUrl', () => {
   it('leaves Gemini and rounds API paths alone', () => {
@@ -30,6 +30,15 @@ describe('normalizeFunctionUrl', () => {
 
   it('keeps an already-public /r path', () => {
     expect(normalizeFunctionUrl('/r/abcdef1234?x=1')).toBe('/r/abcdef1234?x=1');
+  });
+});
+
+describe('originalPath', () => {
+  it('prefers the __path rewrite query over req.url', () => {
+    expect(originalPath({ url: '/api?__path=/r/abcdef1234/image.png' })).toBe('/r/abcdef1234/image.png');
+    expect(originalPath({ url: '/api', query: { __path: '/api/rounds/abcdef1234' } })).toBe(
+      '/api/rounds/abcdef1234'
+    );
   });
 });
 
@@ -95,7 +104,14 @@ describe('createVercelHandler', () => {
       res.end('round');
     });
     const handler = createVercelHandler({ handleApi, handleShare });
-    const req = { url: '/api/r/abcdef1234', method: 'GET', headers: {}, body: '', readableEnded: true };
+    const req = {
+      url: '/api?__path=/r/abcdef1234',
+      method: 'GET',
+      headers: {},
+      query: { __path: '/r/abcdef1234' },
+      body: '',
+      readableEnded: true,
+    };
     await handler(req, makeRes());
     expect(handleShare).toHaveBeenCalledOnce();
     expect(handleApi).not.toHaveBeenCalled();
@@ -140,7 +156,14 @@ describe('createVercelHandler', () => {
         getIndexHtml: async () => '<html><head></head><body>shell</body></html>',
       }),
     });
-    const req = { url: '/api/r/aaaaaaaaaa', method: 'GET', headers: {}, body: undefined, readableEnded: true };
+    const req = {
+      url: '/api?__path=/r/aaaaaaaaaa',
+      method: 'GET',
+      headers: {},
+      query: { __path: '/r/aaaaaaaaaa' },
+      body: undefined,
+      readableEnded: true,
+    };
     const res = makeRes();
     await handler(req, res);
     expect(res.raw).toContain('shell');
