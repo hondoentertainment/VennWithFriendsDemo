@@ -163,7 +163,15 @@ export function createConcurrencyGate(limit = 8) {
 export function guardConfigFromEnv(env = process.env) {
   return {
     allowedOrigins: parseOrigins(env.ALLOWED_ORIGINS),
-    trustedHops: Number(env.TRUST_PROXY_HOPS) || 0,
+    // Vercel always sits behind its edge proxy. Without a hop, rate limiting
+    // keys on the isolate rather than the client. An explicit TRUST_PROXY_HOPS
+    // still wins, including `0` to turn this off.
+    trustedHops:
+      env.TRUST_PROXY_HOPS != null && env.TRUST_PROXY_HOPS !== ''
+        ? Number(env.TRUST_PROXY_HOPS) || 0
+        : env.VERCEL
+          ? 1
+          : 0,
     capacity: Number(env.RATE_LIMIT_CREDITS) || 60,
     windowMs: Number(env.RATE_LIMIT_WINDOW_MS) || 60_000,
     maxConcurrent: Number(env.MAX_CONCURRENT_UPSTREAM) || 8,

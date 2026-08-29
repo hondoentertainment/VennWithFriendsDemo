@@ -194,6 +194,12 @@ describe('guardConfigFromEnv', () => {
     expect(config.maxConcurrent).toBeGreaterThan(0);
   });
 
+  it('trusts one proxy hop on Vercel unless overridden', () => {
+    expect(guardConfigFromEnv({ VERCEL: '1' }).trustedHops).toBe(1);
+    expect(guardConfigFromEnv({ VERCEL: '1', TRUST_PROXY_HOPS: '0' }).trustedHops).toBe(0);
+    expect(guardConfigFromEnv({ VERCEL: '1', TRUST_PROXY_HOPS: '2' }).trustedHops).toBe(2);
+  });
+
   it('reads overrides from the environment', () => {
     const config = guardConfigFromEnv({
       ALLOWED_ORIGINS: 'https://a.example',
