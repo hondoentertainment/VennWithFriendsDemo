@@ -28,6 +28,10 @@ describe('normalizeFunctionUrl', () => {
     expect(normalizeFunctionUrl('visualize')).toBe('/api/visualize');
   });
 
+  it('does not turn a bare /api into /api/api', () => {
+    expect(normalizeFunctionUrl('/api')).toBe('/api');
+  });
+
   it('keeps an already-public /r path', () => {
     expect(normalizeFunctionUrl('/r/abcdef1234?x=1')).toBe('/r/abcdef1234?x=1');
   });

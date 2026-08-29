@@ -20,10 +20,11 @@ import { createShareHandler } from './share.mjs';
 import { createStoreFromEnv } from './store.mjs';
 
 /**
- * vercel.json rewrites `/api/:path+` and `/r/:path+` onto `/api` (this
- * function) and stashes the public path in `__path`. Vite on Vercel does not
- * treat `api/[...path].mjs` as a multi-segment catch-all, so the query is
- * how the original route survives.
+ * vercel.json rewrites `/api/*` and `/r/*` onto `/api/app` (this function)
+ * and stashes the public path in `__path`. Vite on Vercel does not treat
+ * `api/[...path].mjs` as a multi-segment catch-all, and rewriting onto
+ * `/api` itself loses the query on some paths, so the function lives at a
+ * name that is not the rewrite source.
  *
  * Some Node runtimes also strip the `/api` prefix. Put it back so ROUTES
  * in genai.mjs still match.
@@ -45,7 +46,7 @@ export function normalizeFunctionUrl(url) {
 
   if (next === '/api/r' || next.startsWith('/api/r/')) {
     next = next.slice('/api'.length);
-  } else if (!next.startsWith('/api/') && !next.startsWith('/r/')) {
+  } else if (next !== '/api' && !next.startsWith('/api/') && !next.startsWith('/r/')) {
     next = next.startsWith('/') ? `/api${next}` : `/api/${next}`;
   }
 

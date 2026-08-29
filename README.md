@@ -51,7 +51,7 @@ small adapter instead:
 - [`vercel.json`](vercel.json) builds with `npm run build`, publishes `dist/`,
   rewrites client routes to the SPA, and sends `/api/*` and `/r/*` to a
   Node function.
-- [`api/index.mjs`](api/index.mjs) wraps the existing `createApiHandler` /
+- [`api/app.mjs`](api/app.mjs) wraps the existing `createApiHandler` /
   `createShareHandler` — Gemini, guards, and validation stay in
   `server/*.mjs`. `vercel.json` rewrites `/api/*` and `/r/*` onto that
   function with the original path in `__path`.
