@@ -3,8 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { createApiHandler } from './server/genai.mjs';
 import { guardConfigFromEnv } from './server/guard.mjs';
-import { createRoundStore } from './server/rounds.mjs';
+import { resolvePublicUrl } from './server/public-url.mjs';
 import { createShareHandler } from './server/share.mjs';
+import { createStoreFromEnv } from './server/store.mjs';
 
 try {
   process.loadEnvFile('.env.local');
@@ -28,15 +29,9 @@ const MIME_TYPES = {
 
 const handleApi = createApiHandler(() => process.env.GEMINI_API_KEY);
 
-const roundStore = createRoundStore({
-  dir: process.env.ROUNDS_DIR || '.data/rounds',
-  ttlMs: Number(process.env.ROUNDS_TTL_MS) || undefined,
-  maxRounds: Number(process.env.ROUNDS_MAX) || undefined,
-});
-
 const handleShare = createShareHandler({
-  store: roundStore,
-  publicUrl: process.env.PUBLIC_URL,
+  store: createStoreFromEnv(),
+  publicUrl: resolvePublicUrl(),
   config: guardConfigFromEnv(),
   // Read per request rather than cached: the shell changes on every deploy,
   // and this route is not hot enough for the read to matter.

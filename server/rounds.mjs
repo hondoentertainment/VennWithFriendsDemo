@@ -13,8 +13,9 @@
  *     free text, so keeping them forever is a choice nobody made deliberately;
  *     expiry is the conservative default and TTL is configurable.
  *   - Storage is the filesystem rather than a database: one JSON file and one
- *     PNG per round. That keeps the deployment a single Node process, at the
- *     cost of not surviving a host with an ephemeral disk (see README).
+ *     PNG per round. That keeps `npm start` / Render a single Node process.
+ *     Hosts with an ephemeral disk (Vercel) use the Blob store in
+ *     blob-store.mjs instead — see createStoreFromEnv.
  */
 
 import { randomBytes } from 'node:crypto';
