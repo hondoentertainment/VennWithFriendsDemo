@@ -3,6 +3,13 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "destination": "https://giant-schrodinger.vercel.app/$1",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     { "source": "/api/((?!app$).*)", "destination": "/api/app?__path=/api/$1" },
     { "source": "/r/:path*", "destination": "/api/app?__path=/r/:path*" },
