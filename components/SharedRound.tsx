@@ -15,6 +15,7 @@ interface SharedRoundViewProps {
  */
 const SharedRoundView: React.FC<SharedRoundViewProps> = ({ round }) => {
   const ordered = [...round.submissions].sort((a, b) => b.score - a.score);
+  const winner = round.submissions.find((sub) => sub.isWinner);
 
   // The stored media carries only the fields the page renders; VennDiagram
   // wants a full ImageItem, so the unused ones are filled in.
@@ -35,6 +36,8 @@ const SharedRoundView: React.FC<SharedRoundViewProps> = ({ round }) => {
           intersectionImage={round.hasImage ? `/r/${round.id}/image.png` : null}
           label={round.label || undefined}
           showGlow
+          memeCaption={winner?.content}
+          memeAuthor={winner?.name}
         />
 
         <div className="bg-white p-6 sm:p-8 rounded-[2.5rem] shadow-2xl border-4 border-brand-primary max-w-2xl mx-auto space-y-6">

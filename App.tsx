@@ -560,6 +560,7 @@ const App: React.FC = () => {
 
     if (gameState.phase === 'RESULTS' && gameState.currentImages) {
       const verdict = gameState.aiModeratorVerdict;
+      const winningSubmission = verdict ? gameState.submissions.find(s => s.playerId === verdict.winnerId) : undefined;
       return (
         <div className="min-h-screen p-8 bg-brand-cream flex flex-col items-center overflow-y-auto">
           <Logo size="sm" className="mb-8" />
@@ -570,6 +571,8 @@ const App: React.FC = () => {
               intersectionImage={collisionImage}
               label={gameState.intersectionLabel}
               showGlow={true}
+              memeCaption={winningSubmission?.content}
+              memeAuthor={winningSubmission && playerById(winningSubmission.playerId)?.name}
             />
             <div className="bg-white p-8 rounded-[2.5rem] shadow-2xl border-4 border-brand-primary max-w-2xl mx-auto space-y-6">
               <h3 className="text-2xl font-heading font-bold text-center">The Verdict</h3>

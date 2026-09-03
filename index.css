@@ -38,7 +38,34 @@ h3 {
 }
 .venn-overlap {
   fill: oklch(0.55 0.24 264);
-  fill-opacity: 0.4;
+  fill-opacity: 0.3;
+  transition: fill-opacity 1s ease-out;
+}
+
+/*
+ * Media inside the diagram scales from its own centre. SVG elements otherwise
+ * transform around the viewBox origin, which drags a clipped photo off its
+ * circle the moment it is scaled or animated.
+ */
+.venn-media {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: scale 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Meme caption: heavy white type with a dark outline, readable on any image. */
+.meme-text {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #fff;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  -webkit-text-stroke: 0.045em rgba(0, 0, 0, 0.9);
+  paint-order: stroke fill;
+  text-shadow:
+    0 0.06em 0.2em rgba(0, 0, 0, 0.7),
+    0 0 0.04em rgba(0, 0, 0, 0.9);
 }
 
 @keyframes pulse-glow {
@@ -88,6 +115,30 @@ h3 {
   transform-origin: center;
 }
 
+@keyframes lens-reveal {
+  0% {
+    filter: brightness(1.8) saturate(0.4);
+  }
+  100% {
+    filter: brightness(1) saturate(1);
+  }
+}
+.animate-lens-reveal {
+  animation: lens-reveal 1.4s ease-out forwards;
+}
+
+@keyframes lightbox-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-lightbox-in {
+  animation: lightbox-in 0.25s ease-out forwards;
+}
+
 @keyframes label-pop {
   from {
     opacity: 0;
@@ -131,8 +182,13 @@ h3 {
 
   .animate-media-entry,
   .animate-fade-zoom-in,
-  .animate-label-pop {
+  .animate-label-pop,
+  .animate-lightbox-in {
     opacity: 1;
     transform: none;
+  }
+
+  .animate-lens-reveal {
+    filter: none;
   }
 }
